@@ -86,6 +86,12 @@ jobs:
       - name: Export the agent's patch
         if: steps.gate.outputs.run == 'true'
         run: |
+          # A run stopped by the turn, budget or time limit leaves tests nobody explained: publish none.
+          if ! jq -e '.report' "$RUNNER_TEMP/out/summary.json" > /dev/null 2>&1; then
+            echo "::warning::The agent returned no report, so its changes are not published."
+            : > "$RUNNER_TEMP/out/agent.patch"
+            exit 0
+          fi
           # Only the writable test roots; stray files elsewhere (caches, reports) are not the agent's output.
           git add --intent-to-add -- backend/tests frontend/src
           git diff --binary --no-ext-diff --no-textconv HEAD -- backend/tests frontend/src > "$RUNNER_TEMP/out/agent.patch"
