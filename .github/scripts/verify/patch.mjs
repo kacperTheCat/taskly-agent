@@ -8,7 +8,10 @@ import { git } from './packages.mjs';
 // validate-patch checks paths, modes and test counts, then applies the patch to this checkout.
 // A refused patch leaves the checkout as it was.
 export function applyPatch(policy, patchFile) {
-  const { files, problems } = checkStructure(policy, readFileSync(patchFile, 'utf8'));
+  const text = readFileSync(patchFile, 'utf8');
+  if (text.trim() === '') return { testFiles: [], modifiedFiles: [] }; // the agent changed nothing
+
+  const { files, problems } = checkStructure(policy, text);
   const result = problems.length
     ? { status: 1, stderr: problems.join('; ') }
     : spawnSync('node', ['.github/scripts/validate-patch.mjs', patchFile, '--repo', '.'], { encoding: 'utf8' });
