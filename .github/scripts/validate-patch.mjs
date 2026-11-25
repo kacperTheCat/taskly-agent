@@ -3,13 +3,13 @@
 // Usage: validate-patch.mjs <patch file> [--repo <checkout to apply to>]
 // Exits 1 and prints the violations if the patch is not acceptable; applies it with --repo otherwise.
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { isWritable, loadPolicy } from './policy.mjs';
 
 const SECRET = /(sk-ant-[\w-]{10,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,})/;
 const TEST_CALL = /\b(?:it|test)(?:\.(?:each\([^)]*\)|only|skip|todo|concurrent))?\s*\(/g;
-const FOCUS = /\b(?:it|test|describe)\.(?:only|skip|todo)\b|\bx(?:it|describe)\(/g;
+const FOCUS = /\b(?:it|test|describe)\.(?:only|skip|todo|skipIf|runIf|fails)\b|\bx(?:it|describe)\(/g;
 
 const count = (text, re) => (text.match(re) ?? []).length;
 
@@ -50,17 +50,42 @@ export function checkContent(before, after, path) {
   return problems;
 }
 
+// Checks the tree the patch produced, not the patch text: `git apply` accepts more than `diff --git` sections.
+export function checkTree(policy, raw) {
+  const problems = [];
+  const changed = [];
+  const tokens = raw.split('\0');
+  for (let i = 0; i < tokens.length - 1;) {
+    const [, , newMode, , , status] = tokens[i].match(/^:(\d+) (\d+) (\w+) (\w+) ([A-Z])/) ?? [];
+    const path = tokens[i + 1];
+    i += status === 'R' || status === 'C' ? 3 : 2;
+    if (!['A', 'M'].includes(status)) problems.push(`${path}: change type ${status} is not allowed`);
+    else if (newMode !== '100644') problems.push(`${path}: only regular, non-executable files are allowed`);
+    else if (!isWritable(policy, path)) problems.push(`${path}: not a writable test path`);
+    else changed.push({ path, created: status === 'A' });
+  }
+  return { changed, problems };
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   const [patchPath, flag, repo] = process.argv.slice(2);
+  const policy = loadPolicy();
   const patch = readFileSync(patchPath, 'utf8');
-  const { files, problems } = checkStructure(loadPolicy(), patch);
+  const { files, problems } = checkStructure(policy, patch);
   if (!problems.length && flag === '--repo') {
-    const before = Object.fromEntries(files.map((f) => {
-      const p = join(repo, f.b);
-      return [f.b, existsSync(p) ? readFileSync(p, 'utf8') : ''];
-    }));
-    execFileSync('git', ['apply', '--whitespace=nowarn', resolve(patchPath)], { cwd: repo });
-    for (const f of files) problems.push(...checkContent(before[f.b], readFileSync(join(repo, f.b), 'utf8'), f.b));
+    const git = (...a) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' });
+    if (git('status', '--porcelain').trim()) problems.push('target checkout is not clean');
+    else {
+      git('apply', '--whitespace=nowarn', resolve(patchPath));
+      git('add', '--all');
+      const tree = checkTree(policy, git('diff', '--cached', '--raw', '-z', '--no-renames', 'HEAD'));
+      problems.push(...tree.problems);
+      for (const { path, created } of tree.changed) {
+        const before = created ? '' : git('show', `HEAD:${path}`);
+        problems.push(...checkContent(before, readFileSync(join(repo, path), 'utf8'), path));
+      }
+      git('reset', '--quiet');
+    }
   }
   if (problems.length) {
     console.error(problems.map((p) => `- ${p}`).join('\n'));
