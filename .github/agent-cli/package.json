@@ -1,0 +1,8 @@
+{
+  "name": "test-agent-cli",
+  "private": true,
+  "description": "Pinned Claude Code CLI for the test agent workflow, installed from this lockfile.",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.322"
+  }
+}
