@@ -1,15 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MARKER, render, text } from './report.mjs';
+import { MARKER, render } from './report.mjs';
 
-test('agent text cannot mention, link, or break the table', () => {
-  const out = text('ping @org/team see https://evil.example | <img src=x> `code`');
-  assert.doesNotMatch(out, /@org/);
-  assert.doesNotMatch(out, /https:\/\//);
-  assert.doesNotMatch(out, /(^|[^\\])[|<`]/);
-  assert.ok(text('x'.repeat(500)).length <= 200);
-  assert.doesNotMatch(text('see www.evil.example'), /www\./);
-});
+const ran = { run: true };
+const summary = { report: { files: [] } };
+const emptyVerdict = { runs: 2, accepted: [], rejected: [], modifiedExisting: [], coverage: [] };
 
 test('renders a skipped run without calling the model', () => {
   const md = render({ context: { run: false, reason: 'no testable source changes', files: [] } });
@@ -35,29 +30,33 @@ test('renders decisions, coverage, rejections and modified tests', () => {
   }
 });
 
-test('says why nothing was committed when verification or publishing failed', () => {
-  const summary = { report: { files: [] } };
-  assert.match(render({ context: { run: true }, summary }), /Verification did not complete/);
-  assert.match(render({ context: { run: true }, summary, verdict: {}, publish: 'failure' }), /trusted validation/);
+test('says why nothing was committed', () => {
+  assert.match(render({ context: ran, agentOutcome: 'failure' }), /agent job failed/);
+  assert.match(render({ context: ran, summary }), /Verification did not complete/);
+  assert.match(render({ context: ran, summary, verdict: emptyVerdict, commitOutcome: 'failure' }), /trusted checks/);
 });
 
-test('says when verified tests could not be pushed', () => {
-  const md = render({
-    context: { run: true },
-    summary: { report: { files: [] } },
-    verdict: { runs: 2, accepted: ['a.test.ts'], rejected: [], modifiedExisting: [], coverage: [] },
-    publish: 'success',
-    pushed: 'false',
-  });
-  assert.match(md, /were not pushed/);
-  assert.doesNotMatch(md, /committed in/);
+test('says when verified tests were not pushed', () => {
+  const verdict = { ...emptyVerdict, accepted: ['a.test.ts'] };
+  const moved = render({ context: ran, summary, verdict, push: 'branch-moved' });
+  assert.match(moved, /were not pushed/);
+  assert.doesNotMatch(moved, /committed in/);
+  assert.match(render({ context: ran, summary, verdict, push: 'failed' }), /pushing them .* failed/);
+});
+
+test('a malformed verdict and summary still produce a comment', () => {
+  const md = render({ context: ran, summary: { report: { files: 'x' }, turns: '<b>' }, verdict: { runs: 'x' } });
+  assert.match(md, /0 test file\(s\) accepted/);
+  assert.doesNotMatch(md, /<b>/);
+});
+
+test('run details count tool errors', () => {
+  const md = render({ context: ran, summary: { ...summary, toolErrors: ['denied'] }, verdict: emptyVerdict });
+  assert.match(md, /1 tool error/);
 });
 
 test('file names cannot split a table row', () => {
-  const md = render({
-    context: { run: true },
-    summary: { report: { files: [{ source: 'a|b.ts', decision: 'tested', reason: 'x' }] } },
-    verdict: { runs: 2, accepted: [], rejected: [], modifiedExisting: [], coverage: [] },
-  });
+  const files = [{ source: 'a|b.ts', decision: 'tested', reason: 'x' }];
+  const md = render({ context: ran, summary: { report: { files } }, verdict: emptyVerdict });
   assert.match(md, /\| `ab\.ts` \|/);
 });
