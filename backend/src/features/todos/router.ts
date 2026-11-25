@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { TodoStore } from './types.js';
 import { createSchema, updateSchema, idSchema } from './validators.js';
+import { summarizeTodos } from './stats.js';
 
 export function createTodosRouter(repository: TodoStore) {
   const router = Router();
@@ -16,6 +17,7 @@ export function createTodosRouter(repository: TodoStore) {
     if (!result.success) return res.status(422).json({ detail: result.error.issues });
     res.status(201).json(await repository.create(result.data));
   });
+  router.get('/stats', async (req, res) => res.json(summarizeTodos(await repository.list())));
   router.get('/:id', async (req, res) => {
     const todo = await repository.get(Number(res.locals.todoId));
     if (!todo) return res.status(404).json({ detail: 'Task not found.' });
