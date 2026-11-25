@@ -1,7 +1,15 @@
 # Taskly App Node
 
-This repository adds a **unit test agent** to the Taskly app, plus a pull request workflow that runs it: when a PR changes source code, the
-agent writes or updates tests, scripts verify them without trusting the model, and the verified tests land in the PR.
+This repository adds a **unit test agent with reusable skills** (backend, frontend, verification) to the Taskly app.
+It was used in two ways:
+
+- **Coverage backfill:** the agent added missing tests across the backend and frontend
+  ([#17](https://github.com/kacperTheCat/taskly-agent/pull/17), [#18](https://github.com/kacperTheCat/taskly-agent/pull/18)).
+- **Pull request workflow:** when a PR changes testable source code, the agent decides what needs tests, writes or
+  updates them, scripts verify them without trusting the model, and the verified tests land in the PR with a report
+  comment.
+
+More:
 
 - [SOLUTION.md](SOLUTION.md): decisions, how to run it, an example run, evals and limitations.
 - [#19](https://github.com/kacperTheCat/taskly-agent/pull/19): the demo, a feature PR without tests that the workflow completed.
