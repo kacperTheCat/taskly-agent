@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MARKER, render, text } from './report.mjs';
-import { failingTestFiles, failingTypecheckFiles } from './verify.mjs';
 
 test('agent text cannot mention, link, or break the table', () => {
   const out = text('ping @org/team see https://evil.example | <img src=x> `code`');
@@ -36,17 +35,29 @@ test('renders decisions, coverage, rejections and modified tests', () => {
   }
 });
 
-test('verify parses tsc and vitest output', () => {
-  const tsc = "src/a.test.ts(3,1): error TS2304: Cannot find name 'x'.\nsrc/b.ts(1,1): warning";
-  assert.deepEqual([...failingTypecheckFiles(tsc, 'frontend')], ['frontend/src/a.test.ts']);
-  const report = {
-    testResults: [{ name: '/r/frontend/a.test.ts', status: 'failed' }, { name: '/r/frontend/b.test.ts', status: 'passed' }],
-  };
-  assert.deepEqual([...failingTestFiles(report, '/r')], ['frontend/a.test.ts']);
-});
-
 test('says why nothing was committed when verification or publishing failed', () => {
   const summary = { report: { files: [] } };
   assert.match(render({ context: { run: true }, summary }), /Verification did not complete/);
   assert.match(render({ context: { run: true }, summary, verdict: {}, publish: 'failure' }), /trusted validation/);
+});
+
+test('says when verified tests could not be pushed', () => {
+  const md = render({
+    context: { run: true },
+    summary: { report: { files: [] } },
+    verdict: { runs: 2, accepted: ['a.test.ts'], rejected: [], modifiedExisting: [], coverage: [] },
+    publish: 'success',
+    pushed: 'false',
+  });
+  assert.match(md, /were not pushed/);
+  assert.doesNotMatch(md, /committed in/);
+});
+
+test('file names cannot split a table row', () => {
+  const md = render({
+    context: { run: true },
+    summary: { report: { files: [{ source: 'a|b.ts', decision: 'tested', reason: 'x' }] } },
+    verdict: { runs: 2, accepted: [], rejected: [], modifiedExisting: [], coverage: [] },
+  });
+  assert.match(md, /\| `ab\.ts` \|/);
 });

@@ -3,20 +3,23 @@
 // (context), the agent's run summary and the verify verdict. Runs in the `publish` job.
 // Everything the agent wrote is untrusted, so it passes through `text()` before it is shown.
 //
-// Usage: report.mjs --context <json> [--summary <json>] [--verdict <json>]
-//                   [--commit <sha>] [--publish <step outcome>] [--run-url <url>]
+// Usage: report.mjs --context <json> [--summary <json>] [--verdict <json>] [--commit <sha>]
+//                   [--publish <step outcome>] [--pushed true|false] [--run-url <url>]
+// --publish is the outcome of the trusted validation and commit; --pushed says whether the
+// commit reached the PR branch.
 import { readFileSync } from 'node:fs';
+import { isMain, readArgs } from './cli.mjs';
 
 export const MARKER = '<!-- test-agent-report -->';
-const ZERO_WIDTH_SPACE = '​';
+const ZERO_WIDTH_SPACE = '\u200B';
 const MAX_SKIPPED_LISTED = 20;
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  process.stdout.write(render(readInputs(process.argv.slice(2))));
+if (isMain(import.meta.url)) {
+  process.stdout.write(render(readInputs()));
 }
 
-export function render({ context, summary, verdict, commit, publish, runUrl }) {
-  const sections = [MARKER, '### Test agent', headline({ context, summary, verdict, publish })];
+export function render({ context, summary, verdict, commit, publish, pushed, runUrl }) {
+  const sections = [MARKER, '### Test agent', headline({ context, summary, verdict, publish, pushed })];
 
   const ranAndVerified = context.run && publish !== 'failure' && summary?.report && verdict;
   if (ranAndVerified) sections.push(...results(summary, verdict, commit));
@@ -27,11 +30,14 @@ export function render({ context, summary, verdict, commit, publish, runUrl }) {
 }
 
 // One line saying what happened, including why nothing was committed when that is the case.
-function headline({ context, summary, verdict, publish }) {
+function headline({ context, summary, verdict, publish, pushed }) {
   if (!context.run) return `Skipped: ${text(context.reason)}. No model call, cost $0.`;
   if (publish === 'failure') return 'Publishing stopped: the patch failed the trusted validation in the publish job. Nothing was committed.';
   if (!summary?.report) return `The agent did not return a report (outcome: ${text(summary?.outcome ?? 'not run')}). No tests were changed.`;
   if (!verdict) return 'Verification did not complete, so nothing was committed. See the workflow run.';
+  if (verdict.accepted?.length && pushed === 'false') {
+    return 'The tests passed verification but were not pushed: the PR branch moved on while the agent ran. The next run will handle the new commits.';
+  }
   return '';
 }
 
@@ -79,32 +85,38 @@ export function text(value, max = 200) {
     .replace(/\bwww\./gi, `www${ZERO_WIDTH_SPACE}.`);
 }
 
+// Inline code cannot be escaped, so characters that would end it or split a table row are dropped.
 function code(path) {
-  return `\`${String(path).replace(/[`\n]/g, '')}\``;
+  return `\`${String(path).replace(/[`|\n]/g, '')}\``;
 }
 
 function percent(value) {
   return value == null ? 'n/a' : `${value}%`;
 }
 
-function readInputs(args) {
-  const valueOf = (name) => {
-    const index = args.indexOf(name);
-    return index === -1 ? undefined : args[index + 1];
-  };
-  const readJson = (name) => {
-    try {
-      return JSON.parse(readFileSync(valueOf(name), 'utf8'));
-    } catch {
-      return undefined; // missing or unreadable input: the headline explains what is absent
-    }
-  };
+function readInputs() {
+  const args = readArgs({
+    usage: 'report.mjs --context <json> [--summary <json>] [--verdict <json>] [--commit <sha>] [--publish <outcome>] [--pushed true|false] [--run-url <url>]',
+    options: Object.fromEntries(
+      ['context', 'summary', 'verdict', 'commit', 'publish', 'pushed', 'run-url'].map((name) => [name, { type: 'string' }]),
+    ),
+  });
   return {
-    context: readJson('--context') ?? { run: false, reason: 'gate result missing' },
-    summary: readJson('--summary'),
-    verdict: readJson('--verdict'),
-    commit: valueOf('--commit'),
-    publish: valueOf('--publish'),
-    runUrl: valueOf('--run-url'),
+    context: readJson(args.context) ?? { run: false, reason: 'gate result missing' },
+    summary: readJson(args.summary),
+    verdict: readJson(args.verdict),
+    commit: args.commit || undefined,
+    publish: args.publish,
+    pushed: args.pushed,
+    runUrl: args['run-url'],
   };
+}
+
+// A missing or unreadable input is not an error: the headline explains what is absent.
+function readJson(path) {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return undefined;
+  }
 }
