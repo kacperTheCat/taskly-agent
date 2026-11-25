@@ -1,0 +1,280 @@
+name: Test agent
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+concurrency:
+  group: test-agent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+
+jobs:
+  # Holds the API key and a read-only token. Hands its results over as job outputs, so it needs no artifact storage.
+  agent:
+    name: agent
+    # Same-repo PRs only (fork PRs never see the key), never from the default branch, no drafts, no bot pushes, opt-out label.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref != github.event.repository.default_branch &&
+      !github.event.pull_request.draft &&
+      github.event.sender.type != 'Bot' &&
+      !contains(github.event.pull_request.labels.*.name, 'no-test-agent')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: test-agent
+    permissions:
+      contents: read # check out the PR
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+      decision: ${{ steps.collect.outputs.decision }}
+      summary: ${{ steps.collect.outputs.summary }}
+      patch: ${{ steps.collect.outputs.patch }}
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: block
+          disable-sudo-and-containers: true
+          disable-telemetry: true
+          allowed-endpoints: >
+            api.anthropic.com:443 github.com:443 api.github.com:443 registry.npmjs.org:443 binaries.prisma.sh:443
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Classify changes
+        id: gate
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          node .github/scripts/changed-files.mjs --base "$BASE_SHA" --head "$HEAD_SHA" > "$RUNNER_TEMP/out/context.json"
+          echo "run=$(node -p 'require(process.argv[1]).run' "$RUNNER_TEMP/out/context.json")" >> "$GITHUB_OUTPUT"
+      - name: Install dependencies
+        if: steps.gate.outputs.run == 'true'
+        env:
+          CHECKPOINT_DISABLE: '1'
+        run: |
+          (cd backend && npm ci --ignore-scripts && npx --no-install prisma generate)
+          (cd frontend && npm ci --ignore-scripts)
+          # Install scripts allowed on purpose: the CLI's postinstall fetches its native binary. Pinned by the lockfile.
+          npm ci --prefix .github/agent-cli
+      # Test code the agent runs could rewrite files in the workspace, so the checks after the run use this copy.
+      - name: Keep a copy of the checking scripts
+        if: steps.gate.outputs.run == 'true'
+        run: cp -R .github/scripts "$RUNNER_TEMP/scripts"
+      - name: Run agent
+        if: steps.gate.outputs.run == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DISABLE_AUTOUPDATER: '1'
+          DISABLE_TELEMETRY: '1'
+          DISABLE_ERROR_REPORTING: '1'
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
+        run: |
+          export PATH="$GITHUB_WORKSPACE/.github/agent-cli/node_modules/.bin:$PATH"
+          node -p 'require(process.argv[1]).prompt' "$RUNNER_TEMP/out/context.json" > "$RUNNER_TEMP/prompt.txt"
+          node .github/scripts/run-agent.mjs "$RUNNER_TEMP/prompt.txt" "$RUNNER_TEMP/transcript.jsonl" \
+            --max-turns 30 --max-budget-usd 1 > "$RUNNER_TEMP/out/summary.json" || true
+      - name: Export the agent's patch
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          # A run stopped by the turn, budget or time limit leaves tests nobody explained: publish none.
+          if ! jq -e '.report' "$RUNNER_TEMP/out/summary.json" > /dev/null 2>&1; then
+            echo "::warning::The agent returned no report, so its changes are not published."
+            : > "$RUNNER_TEMP/out/agent.patch"
+            exit 0
+          fi
+          # Only the writable test roots; stray files elsewhere (caches, reports) are not the agent's output.
+          git add --intent-to-add -- backend/tests frontend/src
+          git diff --binary --no-ext-diff --no-textconv HEAD -- backend/tests frontend/src > "$RUNNER_TEMP/out/agent.patch"
+      - name: Check the agent's output
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          node "$RUNNER_TEMP/scripts/credentials.mjs" "$RUNNER_TEMP/out/summary.json" "$RUNNER_TEMP/out/agent.patch"
+          node "$RUNNER_TEMP/scripts/transcript.mjs" --log "$RUNNER_TEMP/out/summary.json"
+      - name: Hand over results
+        id: collect
+        run: |
+          out="$RUNNER_TEMP/out"
+          touch "$out/summary.json" "$out/agent.patch"
+          # Later jobs need the gate decision, not the prompt with the diff.
+          jq 'del(.prompt)' "$out/context.json" > "$out/decision.json"
+          # Outputs travel to later jobs through env vars, which cap a single value at 128 KiB.
+          handover() {
+            value=$(base64 -w0 "$out/$2")
+            [ "${#value}" -le 120000 ] || { echo "::error::$1 too large to hand over"; exit 1; }
+            echo "$1=$value" >> "$GITHUB_OUTPUT"
+          }
+          handover decision decision.json
+          handover summary summary.json
+          handover patch agent.patch
+
+  # Runs the tests the agent wrote. No key and no write token, so untrusted test code has nothing to steal.
+  verify:
+    name: verify
+    needs: agent
+    if: needs.agent.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read # check out the PR
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: block
+          disable-sudo-and-containers: true
+          disable-telemetry: true
+          allowed-endpoints: >
+            github.com:443 api.github.com:443 registry.npmjs.org:443 binaries.prisma.sh:443
+            results-receiver.actions.githubusercontent.com:443 *.blob.core.windows.net:443
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Verify tests
+        env:
+          PATCH_B64: ${{ needs.agent.outputs.patch }}
+          CHECKPOINT_DISABLE: '1'
+        run: |
+          (cd backend && npm ci --ignore-scripts && npx --no-install prisma generate)
+          (cd frontend && npm ci --ignore-scripts)
+          mkdir -p "$RUNNER_TEMP/verified"
+          printf '%s' "$PATCH_B64" | base64 -d > "$RUNNER_TEMP/agent.patch"
+          node .github/scripts/verify.mjs "$RUNNER_TEMP/agent.patch" "$BASE_SHA" "$RUNNER_TEMP/verified"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verify-output
+          path: ${{ runner.temp }}/verified
+          retention-days: 7
+
+  # Holds the write token and runs no PR code: scripts come from the base commit and nothing is installed.
+  publish:
+    name: publish
+    needs: [agent, verify]
+    # Also runs when the agent job failed, so the PR comment never goes stale.
+    if: ${{ !cancelled() && needs.agent.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # push the verified tests to the PR branch
+      pull-requests: write # create or update the report comment
+      actions: write # dispatch CI on the new commit
+    steps:
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: block
+          disable-sudo-and-containers: true
+          disable-telemetry: true
+          allowed-endpoints: >
+            github.com:443 api.github.com:443
+            results-receiver.actions.githubusercontent.com:443 *.blob.core.windows.net:443
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.BASE_SHA }}
+          path: trusted
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          path: head
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.verify.result == 'success'
+        with:
+          name: verify-output
+          path: ${{ runner.temp }}/verify
+      - name: Decode agent results
+        env:
+          DECISION_B64: ${{ needs.agent.outputs.decision }}
+          SUMMARY_B64: ${{ needs.agent.outputs.summary }}
+        run: |
+          printf '%s' "$DECISION_B64" | base64 -d > "$RUNNER_TEMP/decision.json"
+          printf '%s' "$SUMMARY_B64" | base64 -d > "$RUNNER_TEMP/summary.json"
+      - name: Commit verified tests
+        id: commit
+        if: needs.verify.result == 'success'
+        run: |
+          patch="$RUNNER_TEMP/verify/verified.patch"
+          # Detects a verdict that does not describe this patch; the binding check is validate-patch below.
+          expected=$(node -p 'require(process.argv[1]).patchSha256' "$RUNNER_TEMP/verify/verdict.json")
+          [ "$expected" = "$(sha256sum "$patch" | cut -d' ' -f1)" ] || { echo "::error::Verdict does not match patch"; exit 1; }
+          [ -s "$patch" ] || exit 0
+          node trusted/.github/scripts/validate-patch.mjs "$patch" --repo head
+          git -C head add --all
+          git -C head -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit --quiet -m 'test(agent): add unit tests for changed code' \
+            -m "Generated by unit-test-agent and verified in run ${GITHUB_RUN_ID}."
+          echo "sha=$(git -C head rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Push and run CI on the new commit
+        id: push
+        if: steps.commit.outputs.sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          retry() { for pause in 5 15 0; do "$@" && return 0; sleep "$pause"; done; return 1; }
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          if git -C head -c "http.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/${HEAD_REF}" 2> "$RUNNER_TEMP/push.err"; then
+            echo "result=pushed" >> "$GITHUB_OUTPUT"
+            # pull_request runs from a GITHUB_TOKEN push wait for approval; a dispatch runs CI on the new commit.
+            if retry gh workflow run ci.yml --ref "$HEAD_REF" --repo "$GITHUB_REPOSITORY"; then
+              echo "ci=dispatched" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::Could not start CI on the new commit."
+              echo "ci=failed" >> "$GITHUB_OUTPUT"
+            fi
+          elif grep -qE 'non-fast-forward|fetch first' "$RUNNER_TEMP/push.err"; then
+            echo "result=branch-moved" >> "$GITHUB_OUTPUT"
+          else
+            cat "$RUNNER_TEMP/push.err"
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Update PR comment
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          AGENT_RESULT: ${{ needs.agent.result }}
+          COMMIT_OUTCOME: ${{ steps.commit.outcome }}
+          COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+          PUSH_RESULT: ${{ steps.push.outputs.result }}
+          CI_RESULT: ${{ steps.push.outputs.ci }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          retry() { for pause in 5 15 0; do "$@" && return 0; sleep "$pause"; done; return 1; }
+          commit=''
+          if [ "$PUSH_RESULT" = 'pushed' ]; then commit="$COMMIT_SHA"; fi
+          node trusted/.github/scripts/report.mjs --context "$RUNNER_TEMP/decision.json" \
+            --summary "$RUNNER_TEMP/summary.json" --verdict "$RUNNER_TEMP/verify/verdict.json" \
+            --agent-outcome "$AGENT_RESULT" --commit-outcome "$COMMIT_OUTCOME" --commit "$commit" \
+            --push "$PUSH_RESULT" --run-url "$RUN_URL" > "$RUNNER_TEMP/comment.md"
+          if [ "$CI_RESULT" = 'failed' ]; then
+            printf '\n**CI could not be started on the new commit.** Run the CI workflow on this branch before merging.\n' >> "$RUNNER_TEMP/comment.md"
+          fi
+          cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
+          # The comment starts with report.mjs's marker line; the bot's earlier comment is found by it.
+          marker=$(head -n 1 "$RUNNER_TEMP/comment.md")
+          comments="repos/${GITHUB_REPOSITORY}/issues/${PR}/comments"
+          retry gh api "$comments" --paginate > "$RUNNER_TEMP/comments.json"
+          id=$(jq -r --arg marker "$marker" '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith($marker))) | .id' \
+            "$RUNNER_TEMP/comments.json" | head -n 1)
+          # REST only: these calls are retried, and gh's GraphQL commands failed under the same outages.
+          if [ -n "$id" ]; then
+            retry gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" -F "body=@$RUNNER_TEMP/comment.md" > /dev/null
+          else
+            retry gh api --method POST "$comments" -F "body=@$RUNNER_TEMP/comment.md" > /dev/null
+          fi
