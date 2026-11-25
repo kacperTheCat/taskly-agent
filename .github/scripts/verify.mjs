@@ -22,7 +22,8 @@ if (isMain(import.meta.url)) {
   const args = readArgs({ usage: 'verify.mjs <patch file> <base sha> <output dir>', positionals: 3 });
   const scratch = mkdtempSync(join(tmpdir(), 'verify-'));
   try {
-    main(...args.positionals, scratch);
+    const [patchFile, baseSha, outDir] = args.positionals;
+    main(patchFile, baseSha, outDir, scratch);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

@@ -66,6 +66,10 @@ jobs:
           (cd frontend && npm ci --ignore-scripts)
           # Install scripts allowed on purpose: the CLI's postinstall fetches its native binary. Pinned by the lockfile.
           npm ci --prefix .github/agent-cli
+      # Test code the agent runs could rewrite files in the workspace, so the checks after the run use this copy.
+      - name: Keep a copy of the checking scripts
+        if: steps.gate.outputs.run == 'true'
+        run: cp -R .github/scripts "$RUNNER_TEMP/scripts"
       - name: Run agent
         if: steps.gate.outputs.run == 'true'
         env:
@@ -79,20 +83,22 @@ jobs:
           node -p 'require(process.argv[1]).prompt' "$RUNNER_TEMP/out/context.json" > "$RUNNER_TEMP/prompt.txt"
           node .github/scripts/run-agent.mjs "$RUNNER_TEMP/prompt.txt" "$RUNNER_TEMP/transcript.jsonl" \
             --max-turns 30 --max-budget-usd 1 > "$RUNNER_TEMP/out/summary.json" || true
-      - name: Collect results
+      - name: Export the agent's patch
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          # Only the writable test roots; stray files elsewhere (caches, reports) are not the agent's output.
+          git add --intent-to-add -- backend/tests frontend/src
+          git diff --binary --no-ext-diff --no-textconv HEAD -- backend/tests frontend/src > "$RUNNER_TEMP/out/agent.patch"
+      - name: Check the agent's output
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          node "$RUNNER_TEMP/scripts/credentials.mjs" "$RUNNER_TEMP/out/summary.json" "$RUNNER_TEMP/out/agent.patch"
+          node "$RUNNER_TEMP/scripts/transcript.mjs" --log "$RUNNER_TEMP/out/summary.json"
+      - name: Hand over results
         id: collect
-        env:
-          RUN: ${{ steps.gate.outputs.run }}
         run: |
           out="$RUNNER_TEMP/out"
           touch "$out/summary.json" "$out/agent.patch"
-          if [ "$RUN" = 'true' ]; then
-            # Only the writable test roots; stray files elsewhere (caches, reports) are not the agent's output.
-            git add --intent-to-add -- backend/tests frontend/src
-            git diff --binary --no-ext-diff --no-textconv HEAD -- backend/tests frontend/src > "$out/agent.patch"
-          fi
-          node .github/scripts/credentials.mjs "$out/summary.json" "$out/agent.patch"
-          node .github/scripts/transcript.mjs --log "$out/summary.json"
           # Later jobs need the gate decision, not the prompt with the diff.
           jq 'del(.prompt)' "$out/context.json" > "$out/decision.json"
           # Outputs travel to later jobs through env vars, which cap a single value at 128 KiB.
