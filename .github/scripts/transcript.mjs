@@ -18,35 +18,35 @@ if (isMain(import.meta.url)) {
 
 export function summarize(transcript) {
   const events = parseLines(transcript);
-  const toolCalls = [];
-  const skills = new Set();
-  const commands = [];
-  const toolErrors = [];
-
-  for (const event of events) {
-    for (const block of event.message?.content ?? []) {
-      if (event.type === 'assistant' && block.type === 'tool_use') {
-        toolCalls.push(block.name);
-        if (block.name === 'Skill') skills.add(block.input?.skill ?? block.input?.name);
-        if (block.name === 'Bash') commands.push(String(block.input?.command ?? '').slice(0, 200));
-      }
-      if (event.type === 'user' && block.type === 'tool_result' && block.is_error) {
-        toolErrors.push(errorText(block).slice(0, 160));
-      }
-    }
-  }
-
+  const toolUses = contentBlocks(events, 'assistant', 'tool_use');
+  const failedResults = contentBlocks(events, 'user', 'tool_result').filter((block) => block.is_error);
   const result = events.find((event) => event.type === 'result') ?? {};
+
+  return {
+    ...resultFields(result),
+    model: events.find((event) => event.type === 'system')?.model ?? null,
+    toolCalls: toolUses.length,
+    skills: [...new Set(toolUses.filter((use) => use.name === 'Skill').map((use) => use.input?.skill ?? use.input?.name))],
+    commands: toolUses.filter((use) => use.name === 'Bash').map((use) => String(use.input?.command ?? '').slice(0, 200)),
+    toolErrors: failedResults.map((block) => errorText(block).slice(0, 160)),
+  };
+}
+
+// The content blocks of one type (tool_use, tool_result) from messages of one role.
+function contentBlocks(events, role, blockType) {
+  return events
+    .filter((event) => event.type === role)
+    .flatMap((event) => event.message?.content ?? [])
+    .filter((block) => block.type === blockType);
+}
+
+// The final `result` event carries the outcome, usage and the structured report.
+function resultFields(result) {
   return {
     outcome: result.subtype ?? 'incomplete',
     turns: result.num_turns ?? null,
     costUsd: result.total_cost_usd ?? null,
     durationMs: result.duration_ms ?? null,
-    model: events.find((event) => event.type === 'system')?.model ?? null,
-    toolCalls: toolCalls.length,
-    skills: [...skills],
-    commands,
-    toolErrors,
     report: result.structured_output ?? null,
   };
 }
