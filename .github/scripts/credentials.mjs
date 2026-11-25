@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // One definition of "looks like a credential", used on everything the agent produced
-// before it leaves the job (the patch, the run summary). It catches keys in plain text only;
-// the real protection is that the agent never sees a key (see run-tests.mjs and settings.json).
+// before it leaves the job (the patch, the run summary). It catches keys in plain text only,
+// so it is a tripwire, not a guarantee.
 //
 // Usage: credentials.mjs <file>...   Exits 1 if any file contains a credential-like string.
 import { readFileSync } from 'node:fs';
