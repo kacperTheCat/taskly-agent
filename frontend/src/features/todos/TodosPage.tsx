@@ -11,6 +11,7 @@ import { useTodoFilters } from './hooks/useTodoFilters'
 import { useTodosBusy } from './hooks/useTodosBusy'
 import { useTodosQuery } from './hooks/useTodosQuery'
 import { useUpdateTodoMutation } from './hooks/useUpdateTodoMutation'
+import { describeProgress } from './utils/progress'
 import type { Todo } from './types'
 
 export function TodosPage() {
@@ -50,6 +51,7 @@ export function TodosPage() {
       <main id="main" className="page-layout">
         <TodosHeader
           disabled={todosQuery.isPending || busy}
+          progress={todosQuery.data && describeProgress(todosQuery.data)}
           onCreate={() => setEditor('new')}
         />
         <TodoFilters

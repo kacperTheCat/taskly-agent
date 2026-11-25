@@ -3,9 +3,11 @@ import { Button, Heading, Text } from '../../../design-system'
 
 export function TodosHeader({
   disabled,
+  progress,
   onCreate,
 }: {
   disabled: boolean
+  progress?: string
   onCreate: () => void
 }) {
   return (
@@ -13,6 +15,7 @@ export function TodosHeader({
       <div className="stack compact">
         <Heading id="page-title">Tasks</Heading>
         <Text muted>Create, organize, and complete tasks.</Text>
+        {progress && <Text aria-live="polite">{progress}</Text>}
       </div>
       <Button disabled={disabled} onClick={onCreate}>
         <Plus size={18} aria-hidden="true" />
