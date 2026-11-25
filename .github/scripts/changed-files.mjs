@@ -12,7 +12,7 @@ import { classify, loadPolicy } from './policy.mjs';
 
 const MODES = ['pr', 'backfill'];
 const PR_TASK = 'Pull request change set. Decide per candidate whether its change needs new or updated tests, then write and verify them.';
-const BACKFILL_TASK = 'Raise unit test coverage for these existing source files. Read their current coverage with the test wrapper first and test the behaviour that is not covered yet.';
+const BACKFILL_TASK = 'Raise unit test coverage for these existing source files. Where a test file exists, run it with coverage through the test wrapper first, then test the behaviour that is not covered yet.';
 const USAGE = 'changed-files.mjs --base <sha> [--head <sha>] [--mode pr|backfill]  |  changed-files.mjs [--mode pr|backfill] <path>...';
 
 if (isMain(import.meta.url)) {

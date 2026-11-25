@@ -1,5 +1,14 @@
 # Taskly App Node
 
+This repository adds a **unit test agent** to the Taskly app, plus a pull request workflow that runs it: when a PR changes source code, the
+agent writes or updates tests, scripts verify them without trusting the model, and the verified tests land in the PR.
+
+- [SOLUTION.md](SOLUTION.md): decisions, how to run it, an example run, evals and limitations.
+- [#19](https://github.com/kacperTheCat/taskly-agent/pull/19): the demo, a feature PR without tests that the workflow completed.
+- [#16](https://github.com/kacperTheCat/taskly-agent/pull/16): the workflow, with its three jobs split by access.
+
+The app itself is described below.
+
 ## Setup
 
 ```sh

@@ -3,6 +3,7 @@
 // so the tool allowlist, permission mode and limits below are the same everywhere.
 //
 // Usage: run-agent.mjs <prompt file> <transcript.jsonl> [--model sonnet] [--max-turns 30] [--max-budget-usd 1]
+// The values shown are the defaults; a backfill may raise the turns, never past the budget.
 // Prints the run summary (outcome, turns, cost, skills, report) as JSON; exits 1 without a report.
 import { spawnSync } from 'node:child_process';
 import { closeSync, openSync, readFileSync } from 'node:fs';
@@ -21,7 +22,7 @@ function main() {
     options: {
       model: { type: 'string', default: 'sonnet' },
       'max-turns': { type: 'string', default: '30' },
-      'max-budget-usd': { type: 'string' },
+      'max-budget-usd': { type: 'string', default: '1' },
     },
   });
   const [promptFile, transcriptFile] = args.positionals;
@@ -62,6 +63,6 @@ function buildClaudeArgs(args) {
     '--output-format', 'stream-json',
     '--verbose',
   ];
-  if (args['max-budget-usd']) claudeArgs.push('--max-budget-usd', args['max-budget-usd']);
+  claudeArgs.push('--max-budget-usd', args['max-budget-usd']);
   return claudeArgs;
 }

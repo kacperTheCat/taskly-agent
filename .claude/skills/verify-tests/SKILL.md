@@ -11,7 +11,7 @@ A test counts only after it has run and passed here. Run tests only through the 
 node .claude/scripts/run-tests.mjs <test file>... --cover <changed source file>...
 ```
 
-It runs Vitest per package and prints coverage for the source files passed with `--cover`. Fully covered files are left out of the coverage table.
+It runs Vitest per package and prints coverage for the source files passed with `--cover`.
 
 Call it as one plain command, exactly in this form. Loops, pipes (`| tail`), redirects (`2>&1`) and `cd ... &&` are denied. To run twice, call it twice.
 

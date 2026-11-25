@@ -40,6 +40,7 @@ const wrapper = ({ children }: { children: ReactNode }) => (
   Use `renderHook(..., { wrapper })`, seed and assert the cache with `client.setQueryData` / `getQueryData`.
 
 ## Fixtures and time
+- Pick data where the expected result differs from the default: a sort test whose expected order equals the default order cannot fail.
 - Use `todoFixture` from `src/test/todoFixture` and derive variants with spread. Do not mutate it.
 - Code that reads the current date or uses timeouts: `vi.useFakeTimers()`, `vi.setSystemTime(...)`, restore in `afterEach`. With user-event use `userEvent.setup({ advanceTimers: vi.advanceTimersByTime })`.
 

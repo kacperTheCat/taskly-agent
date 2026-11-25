@@ -163,7 +163,7 @@ jobs:
   publish:
     name: publish
     needs: [agent, verify]
-    # Also runs when the agent job failed, so the PR comment never goes stale.
+    # Also runs when the agent job failed, so a failed run still updates the PR comment.
     if: ${{ !cancelled() && needs.agent.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
