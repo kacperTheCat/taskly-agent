@@ -48,7 +48,7 @@ export function checkStructure(policy, patch) {
 
   const files = parsePatch(patch);
   for (const file of files) {
-    const name = file.oldPath ?? '?';
+    const name = file.newPath ?? file.oldPath ?? '(unnamed file)';
     if (file.oldPath !== file.newPath) problems.push(`${name}: path change is not allowed`);
     if (file.deleted) problems.push(`${name}: deleting files is not allowed`);
     if (file.renamedOrCopied) problems.push(`${name}: renames and copies are not allowed`);
@@ -56,7 +56,7 @@ export function checkStructure(policy, patch) {
     if (file.oldMode || (file.newMode && file.newMode !== REGULAR_FILE)) {
       problems.push(`${name}: mode changes, symlinks and executables are not allowed`);
     }
-    if (!isWritable(policy, file.newPath ?? '')) problems.push(`${file.newPath}: not a writable test path`);
+    if (!isWritable(policy, file.newPath ?? '')) problems.push(`${name}: not a writable test path`);
   }
   return { files, problems };
 }

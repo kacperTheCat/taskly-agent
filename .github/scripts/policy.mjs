@@ -41,31 +41,24 @@ export function globToRegExp(glob) {
   let braceDepth = 0;
   for (let i = 0; i < glob.length; i++) {
     const char = glob[i];
-    switch (true) {
-      case glob.startsWith('**/', i):
-        pattern += '(?:.*/)?';
-        i += 2;
-        break;
-      case glob.startsWith('**', i):
-        pattern += '.*';
-        i += 1;
-        break;
-      case char === '*':
-        pattern += '[^/]*';
-        break;
-      case char === '{':
-        pattern += '(?:';
-        braceDepth++;
-        break;
-      case char === '}' && braceDepth > 0:
-        pattern += ')';
-        braceDepth--;
-        break;
-      case char === ',' && braceDepth > 0:
-        pattern += '|';
-        break;
-      default:
-        pattern += char.replace(/[.+?^$(){}|[\]\\,]/g, '\\$&');
+    if (glob.startsWith('**/', i)) {
+      pattern += '(?:.*/)?';
+      i += 2;
+    } else if (glob.startsWith('**', i)) {
+      pattern += '.*';
+      i += 1;
+    } else if (char === '*') {
+      pattern += '[^/]*';
+    } else if (char === '{') {
+      pattern += '(?:';
+      braceDepth++;
+    } else if (char === '}' && braceDepth > 0) {
+      pattern += ')';
+      braceDepth--;
+    } else if (char === ',' && braceDepth > 0) {
+      pattern += '|';
+    } else {
+      pattern += char.replace(/[.+?^$(){}|[\]\\,]/g, '\\$&');
     }
   }
   return new RegExp(`^${pattern}$`);

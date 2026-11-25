@@ -2,12 +2,18 @@
 // Summarises a `claude -p --output-format stream-json` transcript: outcome, turns, cost,
 // skills used, shell commands, tool errors and the structured report. Tolerates a cut-off last line.
 //
-// Usage: transcript.mjs <transcript.jsonl>
+// Usage: transcript.mjs <transcript.jsonl>   prints the summary as JSON
+//        transcript.mjs --log <summary.json> prints the commands and tool errors, one per line
 import { readFileSync } from 'node:fs';
-import { isMain } from './cli.mjs';
+import { isMain, readArgs } from './cli.mjs';
 
 if (isMain(import.meta.url)) {
-  console.log(JSON.stringify(summarize(readFileSync(process.argv[2], 'utf8')), null, 2));
+  const args = readArgs({
+    usage: 'transcript.mjs <transcript.jsonl> | transcript.mjs --log <summary.json>',
+    options: { log: { type: 'string' } },
+  });
+  if (args.log) printLog(readJson(args.log));
+  else if (args.positionals[0]) console.log(JSON.stringify(summarize(readFileSync(args.positionals[0], 'utf8')), null, 2));
 }
 
 export function summarize(transcript) {
@@ -45,6 +51,12 @@ export function summarize(transcript) {
   };
 }
 
+// Commands and tool errors explain a run that produced nothing, so CI prints them.
+function printLog(summary) {
+  for (const command of summary?.commands ?? []) console.log(`command: ${command}`);
+  for (const error of summary?.toolErrors ?? []) console.log(`tool error: ${error}`);
+}
+
 function parseLines(transcript) {
   const events = [];
   for (const line of transcript.split('\n')) {
@@ -61,4 +73,12 @@ function parseLines(transcript) {
 function errorText(block) {
   if (typeof block.content === 'string') return block.content;
   return String(block.content?.[0]?.text ?? '');
+}
+
+function readJson(path) {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return undefined;
+  }
 }
