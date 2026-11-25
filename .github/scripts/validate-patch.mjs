@@ -8,16 +8,21 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { isMain, readArgs } from './cli.mjs';
+import { CREDENTIAL_PATTERN } from './credentials.mjs';
 import { isWritable, loadPolicy } from './policy.mjs';
 
-const CREDENTIAL = /sk-ant-[\w-]{10,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}/;
 const TEST_CALL = /\b(?:it|test)(?:\.(?:each\([^)]*\)|only|skip|todo|concurrent))?\s*\(/g;
 const FOCUS_OR_SKIP = /\b(?:it|test|describe)\.(?:only|skip|todo|skipIf|runIf|fails)\b|\bx(?:it|describe)\(/g;
 const REGULAR_FILE = '100644';
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const [patchFile, flag, repo] = process.argv.slice(2);
-  main(patchFile, flag === '--repo' ? repo : undefined);
+if (isMain(import.meta.url)) {
+  const args = readArgs({
+    usage: 'validate-patch.mjs <patch file> [--repo <clean checkout>]',
+    positionals: 1,
+    options: { repo: { type: 'string' } },
+  });
+  main(args.positionals[0], args.repo);
 }
 
 function main(patchFile, repo) {
@@ -39,7 +44,7 @@ function main(patchFile, repo) {
 // Step 1: what the patch text says it does.
 export function checkStructure(policy, patch) {
   const problems = [];
-  if (CREDENTIAL.test(patch)) problems.push('patch contains something that looks like a credential');
+  if (CREDENTIAL_PATTERN.test(patch)) problems.push('patch contains something that looks like a credential');
 
   const files = parsePatch(patch);
   for (const file of files) {
@@ -79,7 +84,11 @@ function applyAndCheckResult(policy, patchPath, repo) {
   const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' });
   if (git('status', '--porcelain').trim()) return ['target checkout is not clean'];
 
-  git('apply', '--whitespace=nowarn', patchPath);
+  try {
+    git('apply', '--whitespace=nowarn', patchPath);
+  } catch {
+    return ['patch does not apply to the target checkout'];
+  }
   git('add', '--all');
   const { changed, problems } = checkTree(policy, git('diff', '--cached', '--raw', '-z', '--no-renames', 'HEAD'));
 
@@ -116,7 +125,8 @@ function parseRawDiff(rawDiff) {
   return entries;
 }
 
-// A changed test file may not lose tests or gain .only/.skip-style markers.
+// A changed test file may not lose tests or gain .only/.skip-style markers. Counting calls
+// is a heuristic against quietly dropped tests, not proof: a renamed test still counts once.
 export function checkContent(before, after, path) {
   const problems = [];
   if (count(after, TEST_CALL) < count(before, TEST_CALL)) problems.push(`${path}: number of tests dropped`);

