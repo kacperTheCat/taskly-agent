@@ -26,6 +26,24 @@ function main() {
   });
   const [promptFile, transcriptFile] = args.positionals;
 
+  const claudeArgs = buildClaudeArgs(args);
+
+  const transcript = openSync(transcriptFile, 'w');
+  const { status, error } = spawnSync('claude', claudeArgs, {
+    input: readFileSync(promptFile, 'utf8'),
+    stdio: ['pipe', transcript, 'inherit'],
+    timeout: TIMEOUT_MS,
+  });
+  closeSync(transcript);
+  if (error) console.error(`claude failed to run: ${error.message}`);
+
+  const summary = summarize(readFileSync(transcriptFile, 'utf8'));
+  console.log(JSON.stringify({ exitCode: status, ...summary }, null, 2));
+  process.exit(summary.report ? 0 : 1);
+}
+
+// The same flags everywhere the agent runs: CI, coverage backfill and evals.
+function buildClaudeArgs(args) {
   const claudeArgs = [
     '-p',
     '--agent', 'unit-test-agent',
@@ -45,17 +63,5 @@ function main() {
     '--verbose',
   ];
   if (args['max-budget-usd']) claudeArgs.push('--max-budget-usd', args['max-budget-usd']);
-
-  const transcript = openSync(transcriptFile, 'w');
-  const { status, error } = spawnSync('claude', claudeArgs, {
-    input: readFileSync(promptFile, 'utf8'),
-    stdio: ['pipe', transcript, 'inherit'],
-    timeout: TIMEOUT_MS,
-  });
-  closeSync(transcript);
-  if (error) console.error(`claude failed to run: ${error.message}`);
-
-  const summary = summarize(readFileSync(transcriptFile, 'utf8'));
-  console.log(JSON.stringify({ exitCode: status, ...summary }, null, 2));
-  process.exit(summary.report ? 0 : 1);
+  return claudeArgs;
 }

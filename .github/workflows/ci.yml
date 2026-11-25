@@ -63,6 +63,10 @@ jobs:
         with:
           node-version: 22
       - run: node --test .github/scripts/*.test.mjs
+      - name: Lint agent scripts
+        run: |
+          npm ci --prefix .github/lint --ignore-scripts
+          .github/lint/node_modules/.bin/eslint .github/scripts .claude
 
   workflow-lint:
     name: workflow-lint

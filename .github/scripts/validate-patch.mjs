@@ -10,11 +10,9 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { isMain, readArgs } from './cli.mjs';
 import { CREDENTIAL_PATTERN } from './credentials.mjs';
-import { isWritable, loadPolicy } from './policy.mjs';
-
-const TEST_CALL = /\b(?:it|test)(?:\.(?:each\([^)]*\)|only|skip|todo|concurrent))?\s*\(/g;
-const FOCUS_OR_SKIP = /\b(?:it|test|describe)\.(?:only|skip|todo|skipIf|runIf|fails)\b|\bx(?:it|describe)\(/g;
-const REGULAR_FILE = '100644';
+import { loadPolicy } from './policy.mjs';
+import { parsePatch, parseRawDiff } from './validate-patch/parse.mjs';
+import { checkContent, sectionProblems, treeProblem } from './validate-patch/rules.mjs';
 
 if (isMain(import.meta.url)) {
   const args = readArgs({
@@ -27,9 +25,7 @@ if (isMain(import.meta.url)) {
 
 function main(patchFile, repo) {
   const policy = loadPolicy();
-  const patch = readFileSync(patchFile, 'utf8');
-
-  const { files, problems } = checkStructure(policy, patch);
+  const { files, problems } = checkStructure(policy, readFileSync(patchFile, 'utf8'));
   if (problems.length === 0 && repo) {
     problems.push(...applyAndCheckResult(policy, resolve(patchFile), repo));
   }
@@ -43,39 +39,10 @@ function main(patchFile, repo) {
 
 // Step 1: what the patch text says it does.
 export function checkStructure(policy, patch) {
-  const problems = [];
-  if (CREDENTIAL_PATTERN.test(patch)) problems.push('patch contains something that looks like a credential');
-
   const files = parsePatch(patch);
-  for (const file of files) {
-    const name = file.newPath ?? file.oldPath ?? '(unnamed file)';
-    if (file.oldPath !== file.newPath) problems.push(`${name}: path change is not allowed`);
-    if (file.deleted) problems.push(`${name}: deleting files is not allowed`);
-    if (file.renamedOrCopied) problems.push(`${name}: renames and copies are not allowed`);
-    if (file.binary) problems.push(`${name}: binary content is not allowed`);
-    if (file.oldMode || (file.newMode && file.newMode !== REGULAR_FILE)) {
-      problems.push(`${name}: mode changes, symlinks and executables are not allowed`);
-    }
-    if (!isWritable(policy, file.newPath ?? '')) problems.push(`${name}: not a writable test path`);
-  }
+  const problems = files.flatMap((file) => sectionProblems(policy, file));
+  if (CREDENTIAL_PATTERN.test(patch)) problems.unshift('patch contains something that looks like a credential');
   return { files, problems };
-}
-
-function parsePatch(patch) {
-  const sections = patch.split(/^(?=diff --git )/m).filter((section) => section.startsWith('diff --git '));
-  return sections.map((section) => {
-    const [, oldPath, newPath] = section.match(/^diff --git a\/(\S+) b\/(\S+)/) ?? [];
-    return {
-      oldPath,
-      newPath,
-      created: /^new file mode/m.test(section),
-      deleted: /^deleted file mode/m.test(section),
-      renamedOrCopied: /^(rename|copy) (from|to) /m.test(section),
-      binary: /^(GIT binary patch|Binary files )/m.test(section),
-      newMode: section.match(/^(?:new file mode|new mode) (\d+)/m)?.[1],
-      oldMode: section.match(/^old mode (\d+)/m)?.[1],
-    };
-  });
 }
 
 // Step 2: what the patch actually does to the files. `git apply` also accepts plain
@@ -105,35 +72,10 @@ function applyAndCheckResult(policy, patchPath, repo) {
 export function checkTree(policy, rawDiff) {
   const problems = [];
   const changed = [];
-  for (const { path, status, newMode } of parseRawDiff(rawDiff)) {
-    if (status !== 'A' && status !== 'M') problems.push(`${path}: change type ${status} is not allowed`);
-    else if (newMode !== REGULAR_FILE) problems.push(`${path}: only regular, non-executable files are allowed`);
-    else if (!isWritable(policy, path)) problems.push(`${path}: not a writable test path`);
-    else changed.push({ path, created: status === 'A' });
+  for (const entry of parseRawDiff(rawDiff)) {
+    const problem = treeProblem(policy, entry);
+    if (problem) problems.push(problem);
+    else changed.push({ path: entry.path, created: entry.status === 'A' });
   }
   return { changed, problems };
-}
-
-// `git diff --raw -z` prints ":oldmode newmode oldsha newsha STATUS\0path\0" per file.
-function parseRawDiff(rawDiff) {
-  const tokens = rawDiff.split('\0');
-  const entries = [];
-  for (let i = 0; i + 1 < tokens.length; i += 2) {
-    const [, , newMode, , , status] = tokens[i].match(/^:(\d+) (\d+) (\w+) (\w+) ([A-Z])/) ?? [];
-    entries.push({ path: tokens[i + 1], status, newMode });
-  }
-  return entries;
-}
-
-// A changed test file may not lose tests or gain .only/.skip-style markers. Counting calls
-// is a heuristic against quietly dropped tests, not proof: a renamed test still counts once.
-export function checkContent(before, after, path) {
-  const problems = [];
-  if (count(after, TEST_CALL) < count(before, TEST_CALL)) problems.push(`${path}: number of tests dropped`);
-  if (count(after, FOCUS_OR_SKIP) > count(before, FOCUS_OR_SKIP)) problems.push(`${path}: adds .only/.skip/.todo`);
-  return problems;
-}
-
-function count(text, pattern) {
-  return (text.match(pattern) ?? []).length;
 }
