@@ -51,10 +51,12 @@ function resultFields(result) {
   };
 }
 
-// Commands and tool errors explain a run that produced nothing, so CI prints them.
+// Commands and tool errors explain a run that produced nothing, so CI prints them. They are
+// agent-controlled, so each is printed as a JSON string: a newline cannot start a
+// `::workflow-command::` line in the job log.
 function printLog(summary) {
-  for (const command of summary?.commands ?? []) console.log(`command: ${command}`);
-  for (const error of summary?.toolErrors ?? []) console.log(`tool error: ${error}`);
+  for (const command of summary?.commands ?? []) console.log(`command: ${JSON.stringify(command)}`);
+  for (const error of summary?.toolErrors ?? []) console.log(`tool error: ${JSON.stringify(error)}`);
 }
 
 function parseLines(transcript) {

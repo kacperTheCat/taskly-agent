@@ -40,5 +40,5 @@ test('transcript --log prints commands and tool errors', (t) => {
   const file = join(dir, 'summary.json');
   writeFileSync(file, JSON.stringify(summarize(lines.join('\n'))));
   const { stdout } = runScript('.github/scripts/transcript.mjs', ['--log', file]);
-  assert.equal(stdout, 'command: node .claude/scripts/run-tests.mjs a.test.ts\ntool error: Permission denied\n');
+  assert.equal(stdout, 'command: "node .claude/scripts/run-tests.mjs a.test.ts"\ntool error: "Permission denied"\n');
 });
