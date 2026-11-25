@@ -4,7 +4,7 @@
 // Exits 1 and prints the violations if the patch is not acceptable; applies it with --repo otherwise.
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { isWritable, loadPolicy } from './policy.mjs';
 
 const SECRET = /(sk-ant-[\w-]{10,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,})/;
@@ -59,7 +59,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       const p = join(repo, f.b);
       return [f.b, existsSync(p) ? readFileSync(p, 'utf8') : ''];
     }));
-    execFileSync('git', ['apply', '--whitespace=nowarn', join(process.cwd(), patchPath)], { cwd: repo });
+    execFileSync('git', ['apply', '--whitespace=nowarn', resolve(patchPath)], { cwd: repo });
     for (const f of files) problems.push(...checkContent(before[f.b], readFileSync(join(repo, f.b), 'utf8'), f.b));
   }
   if (problems.length) {
