@@ -7,9 +7,7 @@
 //                   [--push pushed|branch-moved|failed] [--run-url <url>]
 import { isMain } from './cli.mjs';
 import { normalizeSummary, normalizeVerdict, readInputs } from './report/inputs.mjs';
-import {
-  changedExistingTests, decisionsTable, headline, rejectedFiles, runDetails, skippedByPolicy, totals,
-} from './report/sections.mjs';
+import { headline, skippedByPolicy, verifiedSections } from './report/sections.mjs';
 
 export const MARKER = '<!-- test-agent-report -->';
 
@@ -27,11 +25,7 @@ export function render(inputs) {
     MARKER,
     '### Test agent',
     headline({ ...inputs, summary, verdict }),
-    verified && totals(summary, verdict, commit),
-    verified && decisionsTable(summary, verdict),
-    verified && rejectedFiles(verdict),
-    verified && changedExistingTests(verdict),
-    verified && runDetails(summary),
+    ...(verified ? verifiedSections(summary, verdict, commit) : []),
     skippedByPolicy(context.files ?? []),
     runUrl && `[Workflow run](${encodeURI(runUrl)})`,
   ];

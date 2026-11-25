@@ -10,7 +10,8 @@ export function runTestsRepeatedly(packages, testFiles, runs, scratch) {
   for (const { pkg, files } of byPackage(packages, testFiles)) {
     for (let run = 1; run <= runs; run++) {
       const passed = runOnce(pkg, files, join(scratch, `${pkg}-run${run}.json`));
-      for (const file of files.filter((file) => !passed.has(file) && !failures.has(file))) {
+      const newlyFailed = files.filter((path) => !passed.has(path) && !failures.has(path));
+      for (const file of newlyFailed) {
         failures.set(file, run === 1 ? 'tests fail or did not run' : 'flaky: failed on a repeated run');
       }
     }
