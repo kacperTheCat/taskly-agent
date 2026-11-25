@@ -21,14 +21,19 @@ vi.mock('./hooks/useUpdateTodoMutation', () => ({
 vi.mock('./components/TodosHeader', () => ({
   TodosHeader: ({
     disabled,
+    progress,
     onCreate,
   }: {
     disabled: boolean
+    progress?: string
     onCreate: () => void
   }) => (
-    <button disabled={disabled} onClick={onCreate}>
-      New task
-    </button>
+    <div>
+      <p>{progress}</p>
+      <button disabled={disabled} onClick={onCreate}>
+        New task
+      </button>
+    </div>
   ),
 }))
 vi.mock('./components/TodoFilters', () => ({ TodoFilters: () => null }))
@@ -207,6 +212,11 @@ it('ignores toggles and disables creation while busy', async () => {
   await user.click(screen.getByRole('button', { name: 'toggle' }))
   expect(mutateAsync).not.toHaveBeenCalled()
   expect(screen.getByRole('button', { name: 'New task' })).toBeDisabled()
+})
+
+it('passes the task progress to the header', () => {
+  setup({ todos: [todoFixture, { ...todoFixture, id: 2, completed: true }] })
+  expect(screen.getByText('1 of 2 tasks done.')).toBeVisible()
 })
 
 it('disables creation while the list is loading', () => {
