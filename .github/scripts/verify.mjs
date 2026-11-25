@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Checks the agent's tests without any model: applies the patch, typechecks, runs each touched
-// test file twice, removes files that fail, and measures coverage of the changed sources.
+// test file repeatedly, removes files that fail, and measures coverage of the changed sources.
 // Runs in the workflow's `verify` job, which has no API key and no write token.
 //
 // Usage: verify.mjs <patch file> <base sha> <output dir>   (from the root of the PR checkout)
@@ -10,32 +10,37 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import { isMain, readArgs } from './cli.mjs';
 import { classify, loadPolicy } from './policy.mjs';
 import { checkStructure } from './validate-patch.mjs';
 
 const RUNS = 2;
-const policy = loadPolicy();
-const packages = Object.keys(policy.packages);
-const scratch = mkdtempSync(join(tmpdir(), 'verify-'));
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const [patchFile, baseSha, outDir] = process.argv.slice(2);
-  main(patchFile, baseSha, outDir);
+if (isMain(import.meta.url)) {
+  const args = readArgs({ usage: 'verify.mjs <patch file> <base sha> <output dir>', positionals: 3 });
+  const scratch = mkdtempSync(join(tmpdir(), 'verify-'));
+  try {
+    main(...args.positionals, scratch);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
-function main(patchFile, baseSha, outDir) {
-  const changedSources = findChangedSources(baseSha);
-  const coverageBefore = measureCoverage(changedSources);
+function main(patchFile, baseSha, outDir, scratch) {
+  const policy = loadPolicy();
+  const changedSources = findChangedSources(policy, baseSha);
+  const coverageBefore = measureCoverage(changedSources, join(scratch, 'coverage-before'));
 
-  const patch = applyPatch(patchFile);
-  const failures = new Map();
+  const patch = applyPatch(policy, patchFile);
+  let failures = new Map();
   if (!patch.rejected) {
-    checkTypes(patch.testFiles, failures);
-    runTestsTwice(patch.testFiles, failures);
+    const testFailures = runTestsRepeatedly(patch.testFiles, scratch);
+    const typeFailures = checkTypes(patch.testFiles);
+    failures = new Map([...testFailures, ...typeFailures]);
     revertFailingFiles(failures, patch.modifiedFiles);
   }
 
-  const coverageAfter = measureCoverage(changedSources);
+  const coverageAfter = measureCoverage(changedSources, join(scratch, 'coverage-after'));
   const accepted = patch.testFiles.filter((file) => !failures.has(file));
   const rejected = patch.rejected
     ? [{ file: '(patch)', reason: patch.rejected }]
@@ -54,7 +59,7 @@ function main(patchFile, baseSha, outDir) {
   });
 }
 
-function findChangedSources(baseSha) {
+function findChangedSources(policy, baseSha) {
   return git('diff', '--name-only', '--diff-filter=AMR', `${baseSha}...HEAD`)
     .split('\n')
     .filter(Boolean)
@@ -64,7 +69,7 @@ function findChangedSources(baseSha) {
 }
 
 // validate-patch checks paths, modes and test counts, then applies the patch to this checkout.
-function applyPatch(patchFile) {
+function applyPatch(policy, patchFile) {
   const { files, problems } = checkStructure(policy, readFileSync(patchFile, 'utf8'));
   const result = problems.length
     ? { status: 1, stderr: problems.join('; ') }
@@ -81,17 +86,10 @@ function applyPatch(patchFile) {
   };
 }
 
-function checkTypes(testFiles, failures) {
-  for (const pkg of packagesOf(testFiles)) {
-    const tsc = spawnSync('npx', ['--no-install', 'tsc', '--noEmit', '-p', '.'], { cwd: pkg, encoding: 'utf8' });
-    for (const file of failingTypecheckFiles(tsc.stdout, pkg)) {
-      if (testFiles.includes(file)) failures.set(file, 'type errors');
-    }
-  }
-}
-
-// The second run catches tests that depend on timing, order or shared state.
-function runTestsTwice(testFiles, failures) {
+// A test file that fails on any run is rejected. The repeated run catches tests that depend
+// on timing, order or shared state.
+function runTestsRepeatedly(testFiles, scratch) {
+  const failures = new Map();
   for (const pkg of packagesOf(testFiles)) {
     const ownFiles = testFiles.filter((file) => file.startsWith(`${pkg}/`));
     for (let run = 1; run <= RUNS; run++) {
@@ -108,6 +106,25 @@ function runTestsTwice(testFiles, failures) {
       }
     }
   }
+  return failures;
+}
+
+// Vitest does not typecheck, so tsc does. If tsc fails without naming a file, every test
+// file of that package is rejected rather than trusted.
+function checkTypes(testFiles) {
+  const failures = new Map();
+  for (const pkg of packagesOf(testFiles)) {
+    const tsc = spawnSync('npx', ['--no-install', 'tsc', '--noEmit', '-p', '.'], { cwd: pkg, encoding: 'utf8' });
+    if (tsc.status === 0) continue;
+
+    const named = failingTypecheckFiles(tsc.stdout, pkg);
+    const ownFiles = testFiles.filter((file) => file.startsWith(`${pkg}/`));
+    for (const file of ownFiles) {
+      if (named.size === 0) failures.set(file, 'typecheck failed without a file location');
+      else if (named.has(file)) failures.set(file, 'type errors');
+    }
+  }
+  return failures;
 }
 
 function revertFailingFiles(failures, modifiedFiles) {
@@ -118,10 +135,10 @@ function revertFailingFiles(failures, modifiedFiles) {
 }
 
 // Line coverage per changed source file, from a full test run of its package.
-function measureCoverage(sources) {
+function measureCoverage(sources, reportRoot) {
   const coverage = {};
   for (const pkg of packagesOf(sources)) {
-    const reportDir = join(scratch, `coverage-${pkg}-${Date.now()}`);
+    const reportDir = join(reportRoot, pkg);
     const include = sources.filter((s) => s.startsWith(`${pkg}/`)).map((s) => `--coverage.include=${withinPackage(pkg, s)}`);
     vitest(pkg, ['--coverage.enabled', '--coverage.reporter=json-summary', `--coverage.reportsDirectory=${reportDir}`,
       '--coverage.thresholds={}', ...include]);
@@ -159,8 +176,9 @@ export function failingTestFiles(vitestReport, root) {
   return new Set(failed.map((result) => relative(root, result.name)));
 }
 
+// Policy packages (backend, frontend) that contain at least one of the paths.
 function packagesOf(paths) {
-  return packages.filter((pkg) => paths.some((path) => path.startsWith(`${pkg}/`)));
+  return Object.keys(loadPolicy().packages).filter((pkg) => paths.some((path) => path.startsWith(`${pkg}/`)));
 }
 
 function withinPackage(pkg, path) {

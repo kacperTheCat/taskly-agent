@@ -86,14 +86,14 @@ jobs:
           out="$RUNNER_TEMP/out"
           touch "$out/summary.json" "$out/agent.patch"
           if [ "$RUN" = 'true' ]; then
-            git add --intent-to-add .
-            git diff --binary --no-ext-diff --no-textconv HEAD > "$out/agent.patch"
+            # Only the writable test roots; stray files elsewhere (caches, reports) are not the agent's output.
+            git add --intent-to-add -- backend/tests frontend/src
+            git diff --binary --no-ext-diff --no-textconv HEAD -- backend/tests frontend/src > "$out/agent.patch"
           fi
-          if grep -qE 'sk-ant-|gh[pousr]_[A-Za-z0-9]{20}' "$out/summary.json" "$out/agent.patch"; then
-            echo "::error::Agent output contains a credential-like string" && exit 1
-          fi
-          # Tool errors (denied commands, failing test output) explain a run that produced nothing.
+          node .github/scripts/credentials.mjs "$out/summary.json" "$out/agent.patch"
+          # Commands and tool errors explain a run that produced nothing.
           node -e 'const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8") || "{}");
+            for (const c of s.commands ?? []) console.log(`command: ${c}`);
             for (const e of s.toolErrors ?? []) console.log(`tool error: ${e}`)' "$out/summary.json"
           # Outputs travel to later jobs through env vars, which cap a single value at 128 KiB.
           patch=$(base64 -w0 "$out/agent.patch")
@@ -227,14 +227,16 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           COMMIT: ${{ steps.push.outputs.pushed && steps.commit.outputs.sha || '' }}
           PUBLISH: ${{ steps.commit.outcome }}
+          PUSHED: ${{ steps.commit.outputs.sha && (steps.push.outputs.pushed || 'false') || '' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           node trusted/.github/scripts/report.mjs --context "$RUNNER_TEMP/context.json" \
             --summary "$RUNNER_TEMP/summary.json" --verdict "$RUNNER_TEMP/verify/verdict.json" \
-            --commit "$COMMIT" --publish "$PUBLISH" --run-url "$RUN_URL" > "$RUNNER_TEMP/comment.md"
+            --commit "$COMMIT" --publish "$PUBLISH" --pushed "$PUSHED" --run-url "$RUN_URL" > "$RUNNER_TEMP/comment.md"
           cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
+          marker=$(node --input-type=module -e 'import { MARKER } from "./trusted/.github/scripts/report.mjs"; console.log(MARKER)')
           id=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- test-agent-report -->"))) | .id' | head -n 1)
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | head -n 1)
           if [ -n "$id" ]; then
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" -F "body=@$RUNNER_TEMP/comment.md" > /dev/null
           else
