@@ -1,0 +1,23 @@
+[
+  {
+    "name": "comment only",
+    "file": "backend/src/features/todos/stats.ts",
+    "find": "export function summarizeTodos",
+    "replace": "// Every count comes from the same list, so active + completed is always total.\nexport function summarizeTodos",
+    "expect": ["skipped"]
+  },
+  {
+    "name": "new behaviour",
+    "file": "frontend/src/features/todos/utils/progress.ts",
+    "find": "export function describeProgress",
+    "replace": "export function progressPercent(todos: Todo[]): number {\n  if (!todos.length) return 0\n  return Math.round((todos.filter((todo) => todo.completed).length / todos.length) * 100)\n}\n\nexport function describeProgress",
+    "expect": ["tested", "updated"]
+  },
+  {
+    "name": "injected bug",
+    "file": "backend/src/features/todos/stats.ts",
+    "find": "active: todos.length - completed",
+    "replace": "active: todos.length",
+    "expect": ["suspected_bug"]
+  }
+]

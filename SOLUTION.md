@@ -26,6 +26,7 @@ The diagram at the bottom shows the whole flow.
 - Policy (what to test, where tests may go, limits): `.claude/test-policy.json`, enforced by the hook
   `.claude/hooks/guard-writes.mjs` and again by `validate-patch.mjs`
 - Workflow: `.github/workflows/test-agent.yml`, scripts in `.github/scripts`
+- Evals: cases in `.github/evals/cases.json`, runner `.github/scripts/evals.mjs`
 
 ## Running it
 
@@ -52,6 +53,20 @@ node .github/scripts/run-agent.mjs prompt.txt transcript.jsonl > summary.json
 
 The comment shows `progress.ts` at 100% → 100%: the page test already ran that code without checking it. Line coverage
 says a line ran, not that a test checks it, which is what mutation testing measures.
+
+## Evals
+
+Each case makes one small source change and names the decision the agent should report. The runner gives every case a
+throwaway worktree and calls the agent through the same `run-agent.mjs` as CI (`node .github/scripts/evals.mjs`, by hand):
+
+| Case | Expected | Agent decided | Turns | Cost |
+|---|---|---|---|---|
+| comment only | skipped | skipped | 2 | $0.02 |
+| new behaviour | tested or updated | updated | 14 | $0.07 |
+| injected bug | suspected_bug | suspected_bug | 10 | $0.05 |
+
+The injected bug is the important one: the agent reported it instead of changing the existing test to match. Three cases
+show the idea, not the agent's accuracy.
 
 ## Assumptions and limitations
 
@@ -86,7 +101,7 @@ says a line ran, not that a test checks it, which is what mutation testing measu
   was covered, yet 15 of 119 mutants survived (87% score). One removed the due-date sort entirely: the agent's test used
   data where due order equals newest order. With the data fixed in [#18](https://github.com/kacperTheCat/taskly-agent/pull/18), 108 of 119 (91%).
 - Required reviewers on the `test-agent` environment and an isolated runner for the agent job.
-- A pinned model version and an eval set of past PRs, to catch regressions in the agent and skills.
+- A pinned model version and a larger eval set, built from past PRs and run in CI when the agent, skills or policy change.
 
 ## How it works
 
