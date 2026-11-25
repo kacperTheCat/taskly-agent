@@ -4,31 +4,35 @@
 // Used by the workflow (PR mode) and for local coverage backfill.
 //
 // Usage: changed-files.mjs --base <sha> [--head <sha>] [--mode pr|backfill]
-//        changed-files.mjs --files <path>... [--mode pr|backfill]
+//        changed-files.mjs [--mode pr|backfill] <path>...
 // Prints JSON: { run, reason, files, prompt }.
 import { execFileSync } from 'node:child_process';
-import { readArgs } from './cli.mjs';
+import { isMain, readArgs } from './cli.mjs';
 import { classify, loadPolicy } from './policy.mjs';
 
+const MODES = ['pr', 'backfill'];
 const PR_TASK = 'Pull request change set. Decide per candidate whether its change needs new or updated tests, then write and verify them.';
 const BACKFILL_TASK = 'Raise unit test coverage for these existing source files. Read their current coverage with the test wrapper first and test the behaviour that is not covered yet.';
+const USAGE = 'changed-files.mjs --base <sha> [--head <sha>] [--mode pr|backfill]  |  changed-files.mjs [--mode pr|backfill] <path>...';
 
-const args = readArgs({
-  usage: 'changed-files.mjs (--base <sha> [--head <sha>] | --files <path>...) [--mode pr|backfill]',
-  options: {
-    base: { type: 'string' },
-    head: { type: 'string', default: 'HEAD' },
-    files: { type: 'boolean', default: false },
-    mode: { type: 'string', default: 'pr' },
-  },
-});
-if (!args.base && !args.files) {
-  console.error('Give either --base <sha> or --files <path>...');
-  process.exit(2);
+if (isMain(import.meta.url)) {
+  const args = readArgs({
+    usage: USAGE,
+    options: {
+      base: { type: 'string' },
+      head: { type: 'string', default: 'HEAD' },
+      mode: { type: 'string', default: 'pr' },
+    },
+  });
+  const givenFiles = args.positionals.length ? args.positionals : undefined;
+  if (!MODES.includes(args.mode) || Boolean(args.base) === Boolean(givenFiles)) {
+    console.error(`Give --base or a list of paths, not both, and --mode pr or backfill.\nUsage: ${USAGE}`);
+    process.exit(2);
+  }
+  console.log(JSON.stringify(buildTask({ ...args, givenFiles }), null, 2));
 }
-console.log(JSON.stringify(buildTask({ ...args, files: args.files ? args.positionals : undefined }), null, 2));
 
-function buildTask({ base, head, files: givenFiles, mode }) {
+function buildTask({ base, head, givenFiles, mode }) {
   const policy = loadPolicy();
   const range = `${base}...${head}`;
   const paths = givenFiles ?? git('diff', '--name-only', '--diff-filter=AMR', range).split('\n').filter(Boolean);
@@ -49,8 +53,9 @@ function buildTask({ base, head, files: givenFiles, mode }) {
   return { run, reason, files, prompt };
 }
 
-// The agent only starts when there is something to test and the change is small enough to review.
-function gate(limits, mode, candidateCount, changedLines) {
+// The agent only starts when there is something to test and, for a PR, the change is small
+// enough to review. Backfill runs locally on purpose over many files, so it has no size limit.
+export function gate(limits, mode, candidateCount, changedLines) {
   if (candidateCount === 0) return { run: false, reason: 'no testable source changes' };
   if (mode === 'pr' && candidateCount > limits.maxSourceFiles) {
     return { run: false, reason: `too many source files (${candidateCount} > ${limits.maxSourceFiles})` };

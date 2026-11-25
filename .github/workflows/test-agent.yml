@@ -32,7 +32,7 @@ jobs:
       contents: read # check out the PR
     outputs:
       run: ${{ steps.gate.outputs.run }}
-      context: ${{ steps.collect.outputs.context }}
+      decision: ${{ steps.collect.outputs.decision }}
       summary: ${{ steps.collect.outputs.summary }}
       patch: ${{ steps.collect.outputs.patch }}
     steps:
@@ -64,6 +64,7 @@ jobs:
         run: |
           (cd backend && npm ci --ignore-scripts && npx --no-install prisma generate)
           (cd frontend && npm ci --ignore-scripts)
+          # Install scripts allowed on purpose: the CLI's postinstall fetches its native binary. Pinned by the lockfile.
           npm ci --prefix .github/agent-cli
       - name: Run agent
         if: steps.gate.outputs.run == 'true'
@@ -91,18 +92,18 @@ jobs:
             git diff --binary --no-ext-diff --no-textconv HEAD -- backend/tests frontend/src > "$out/agent.patch"
           fi
           node .github/scripts/credentials.mjs "$out/summary.json" "$out/agent.patch"
-          # Commands and tool errors explain a run that produced nothing.
-          node -e 'const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8") || "{}");
-            for (const c of s.commands ?? []) console.log(`command: ${c}`);
-            for (const e of s.toolErrors ?? []) console.log(`tool error: ${e}`)' "$out/summary.json"
+          node .github/scripts/transcript.mjs --log "$out/summary.json"
+          # Later jobs need the gate decision, not the prompt with the diff.
+          jq 'del(.prompt)' "$out/context.json" > "$out/decision.json"
           # Outputs travel to later jobs through env vars, which cap a single value at 128 KiB.
-          patch=$(base64 -w0 "$out/agent.patch")
-          if [ "${#patch}" -gt 120000 ]; then echo "::error::Patch too large to hand over" && exit 1; fi
-          {
-            echo "context=$(base64 -w0 "$out/context.json")"
-            echo "summary=$(base64 -w0 "$out/summary.json")"
-            echo "patch=$patch"
-          } >> "$GITHUB_OUTPUT"
+          handover() {
+            value=$(base64 -w0 "$out/$2")
+            [ "${#value}" -le 120000 ] || { echo "::error::$1 too large to hand over"; exit 1; }
+            echo "$1=$value" >> "$GITHUB_OUTPUT"
+          }
+          handover decision decision.json
+          handover summary summary.json
+          handover patch agent.patch
 
   # Runs the tests the agent wrote. No key and no write token, so untrusted test code has nothing to steal.
   verify:
@@ -150,7 +151,8 @@ jobs:
   publish:
     name: publish
     needs: [agent, verify]
-    if: ${{ !cancelled() && needs.agent.result == 'success' }}
+    # Also runs when the agent job failed, so the PR comment never goes stale.
+    if: ${{ !cancelled() && needs.agent.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -183,10 +185,10 @@ jobs:
           path: ${{ runner.temp }}/verify
       - name: Decode agent results
         env:
-          CONTEXT_B64: ${{ needs.agent.outputs.context }}
+          DECISION_B64: ${{ needs.agent.outputs.decision }}
           SUMMARY_B64: ${{ needs.agent.outputs.summary }}
         run: |
-          printf '%s' "$CONTEXT_B64" | base64 -d > "$RUNNER_TEMP/context.json"
+          printf '%s' "$DECISION_B64" | base64 -d > "$RUNNER_TEMP/decision.json"
           printf '%s' "$SUMMARY_B64" | base64 -d > "$RUNNER_TEMP/summary.json"
       - name: Commit verified tests
         id: commit
@@ -213,28 +215,36 @@ jobs:
         run: |
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
           echo "::add-mask::$auth"
-          if git -C head -c "http.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/${HEAD_REF}"; then
+          if git -C head -c "http.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/${HEAD_REF}" 2> "$RUNNER_TEMP/push.err"; then
+            echo "result=pushed" >> "$GITHUB_OUTPUT"
             # Pushes with GITHUB_TOKEN start no workflows (so no agent loop); a dispatch does, so CI covers the new commit.
             gh workflow run ci.yml --ref "$HEAD_REF" --repo "$GITHUB_REPOSITORY"
-            echo "pushed=true" >> "$GITHUB_OUTPUT"
+          elif grep -qE 'non-fast-forward|fetch first' "$RUNNER_TEMP/push.err"; then
+            echo "result=branch-moved" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::The PR branch moved on while the agent ran; the next run will handle the new commits."
+            cat "$RUNNER_TEMP/push.err"
+            echo "result=failed" >> "$GITHUB_OUTPUT"
           fi
       - name: Update PR comment
         if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
-          COMMIT: ${{ steps.push.outputs.pushed && steps.commit.outputs.sha || '' }}
-          PUBLISH: ${{ steps.commit.outcome }}
-          PUSHED: ${{ steps.commit.outputs.sha && (steps.push.outputs.pushed || 'false') || '' }}
+          AGENT_RESULT: ${{ needs.agent.result }}
+          COMMIT_OUTCOME: ${{ steps.commit.outcome }}
+          COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+          PUSH_RESULT: ${{ steps.push.outputs.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          node trusted/.github/scripts/report.mjs --context "$RUNNER_TEMP/context.json" \
+          commit=''
+          if [ "$PUSH_RESULT" = 'pushed' ]; then commit="$COMMIT_SHA"; fi
+          node trusted/.github/scripts/report.mjs --context "$RUNNER_TEMP/decision.json" \
             --summary "$RUNNER_TEMP/summary.json" --verdict "$RUNNER_TEMP/verify/verdict.json" \
-            --commit "$COMMIT" --publish "$PUBLISH" --pushed "$PUSHED" --run-url "$RUN_URL" > "$RUNNER_TEMP/comment.md"
+            --agent-outcome "$AGENT_RESULT" --commit-outcome "$COMMIT_OUTCOME" --commit "$commit" \
+            --push "$PUSH_RESULT" --run-url "$RUN_URL" > "$RUNNER_TEMP/comment.md"
           cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
-          marker=$(node --input-type=module -e 'import { MARKER } from "./trusted/.github/scripts/report.mjs"; console.log(MARKER)')
+          # The comment starts with report.mjs's marker line; the bot's earlier comment is found by it.
+          marker=$(head -n 1 "$RUNNER_TEMP/comment.md")
           id=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
             --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | head -n 1)
           if [ -n "$id" ]; then

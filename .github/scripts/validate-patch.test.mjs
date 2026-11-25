@@ -4,7 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkContent, checkStructure } from './validate-patch.mjs';
+import { checkStructure } from './validate-patch.mjs';
+import { checkContent } from './validate-patch/rules.mjs';
 import { loadPolicy } from './policy.mjs';
 import { runScript } from './test-helpers.mjs';
 
