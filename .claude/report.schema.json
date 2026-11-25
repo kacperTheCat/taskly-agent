@@ -1,0 +1,64 @@
+{
+  "title": "Unit test agent report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "summary",
+    "files"
+  ],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "maxLength": 400
+    },
+    "files": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "decision",
+          "reason",
+          "tests"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "decision": {
+            "enum": [
+              "tested",
+              "updated",
+              "skipped",
+              "suspected_bug",
+              "failed"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "tests": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          "skills": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "string",
+              "maxLength": 40
+            }
+          }
+        }
+      }
+    }
+  }
+}
