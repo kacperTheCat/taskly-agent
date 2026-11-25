@@ -9,6 +9,7 @@ test('agent text cannot mention, link, or break the table', () => {
   assert.doesNotMatch(out, /https:\/\//);
   assert.doesNotMatch(out, /(^|[^\\])[|<`]/);
   assert.ok(text('x'.repeat(500)).length <= 200);
+  assert.doesNotMatch(text('see www.evil.example'), /www\./);
 });
 
 test('renders a skipped run without calling the model', () => {
@@ -42,4 +43,10 @@ test('verify parses tsc and vitest output', () => {
     testResults: [{ name: '/r/frontend/a.test.ts', status: 'failed' }, { name: '/r/frontend/b.test.ts', status: 'passed' }],
   };
   assert.deepEqual([...failingTestFiles(report, '/r')], ['frontend/a.test.ts']);
+});
+
+test('says why nothing was committed when verification or publishing failed', () => {
+  const summary = { report: { files: [] } };
+  assert.match(render({ context: { run: true }, summary }), /Verification did not complete/);
+  assert.match(render({ context: { run: true }, summary, verdict: {}, publish: 'failure' }), /trusted validation/);
 });
