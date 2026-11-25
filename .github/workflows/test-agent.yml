@@ -92,6 +92,9 @@ jobs:
           if grep -qE 'sk-ant-|gh[pousr]_[A-Za-z0-9]{20}' "$out/summary.json" "$out/agent.patch"; then
             echo "::error::Agent output contains a credential-like string" && exit 1
           fi
+          # Tool errors (denied commands, failing test output) explain a run that produced nothing.
+          node -e 'const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8") || "{}");
+            for (const e of s.toolErrors ?? []) console.log(`tool error: ${e}`)' "$out/summary.json"
           # Outputs travel to later jobs through env vars, which cap a single value at 128 KiB.
           patch=$(base64 -w0 "$out/agent.patch")
           if [ "${#patch}" -gt 120000 ]; then echo "::error::Patch too large to hand over" && exit 1; fi
