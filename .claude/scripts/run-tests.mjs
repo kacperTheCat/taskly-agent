@@ -8,7 +8,8 @@ import { spawnSync } from 'node:child_process';
 import { isMain } from '../../.github/scripts/cli.mjs';
 import { isWritable, loadPolicy } from '../../.github/scripts/policy.mjs';
 
-// Tests are code the agent wrote, so they run without the agent's API key or any token.
+// Tests are code the agent wrote, so they get no key or token in their environment. This is not
+// isolation: they run as the same user as the agent. The spend cap is the remaining control.
 const SECRET_ENV = /KEY|TOKEN|SECRET|PASSWORD/i;
 
 if (isMain(import.meta.url)) main(process.argv.slice(2));
