@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
-  # Started by the test agent after it pushes tests, because pushes made with GITHUB_TOKEN start no workflows.
+  # Started by the test agent after it pushes tests: pull_request runs from a GITHUB_TOKEN push wait for approval.
   workflow_dispatch:
 
 permissions: {}
