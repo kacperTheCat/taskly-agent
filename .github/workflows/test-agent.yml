@@ -225,12 +225,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
+          retry() { for pause in 5 15 0; do "$@" && return 0; sleep "$pause"; done; return 1; }
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
           echo "::add-mask::$auth"
           if git -C head -c "http.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/${HEAD_REF}" 2> "$RUNNER_TEMP/push.err"; then
             echo "result=pushed" >> "$GITHUB_OUTPUT"
-            # Pushes with GITHUB_TOKEN start no workflows (so no agent loop); a dispatch does, so CI covers the new commit.
-            gh workflow run ci.yml --ref "$HEAD_REF" --repo "$GITHUB_REPOSITORY"
+            # pull_request runs from a GITHUB_TOKEN push wait for approval; a dispatch runs CI on the new commit.
+            if retry gh workflow run ci.yml --ref "$HEAD_REF" --repo "$GITHUB_REPOSITORY"; then
+              echo "ci=dispatched" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::Could not start CI on the new commit."
+              echo "ci=failed" >> "$GITHUB_OUTPUT"
+            fi
           elif grep -qE 'non-fast-forward|fetch first' "$RUNNER_TEMP/push.err"; then
             echo "result=branch-moved" >> "$GITHUB_OUTPUT"
           else
@@ -246,21 +252,29 @@ jobs:
           COMMIT_OUTCOME: ${{ steps.commit.outcome }}
           COMMIT_SHA: ${{ steps.commit.outputs.sha }}
           PUSH_RESULT: ${{ steps.push.outputs.result }}
+          CI_RESULT: ${{ steps.push.outputs.ci }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          retry() { for pause in 5 15 0; do "$@" && return 0; sleep "$pause"; done; return 1; }
           commit=''
           if [ "$PUSH_RESULT" = 'pushed' ]; then commit="$COMMIT_SHA"; fi
           node trusted/.github/scripts/report.mjs --context "$RUNNER_TEMP/decision.json" \
             --summary "$RUNNER_TEMP/summary.json" --verdict "$RUNNER_TEMP/verify/verdict.json" \
             --agent-outcome "$AGENT_RESULT" --commit-outcome "$COMMIT_OUTCOME" --commit "$commit" \
             --push "$PUSH_RESULT" --run-url "$RUN_URL" > "$RUNNER_TEMP/comment.md"
+          if [ "$CI_RESULT" = 'failed' ]; then
+            printf '\n**CI could not be started on the new commit.** Run the CI workflow on this branch before merging.\n' >> "$RUNNER_TEMP/comment.md"
+          fi
           cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
           # The comment starts with report.mjs's marker line; the bot's earlier comment is found by it.
           marker=$(head -n 1 "$RUNNER_TEMP/comment.md")
-          id=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | head -n 1)
+          comments="repos/${GITHUB_REPOSITORY}/issues/${PR}/comments"
+          retry gh api "$comments" --paginate > "$RUNNER_TEMP/comments.json"
+          id=$(jq -r --arg marker "$marker" '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith($marker))) | .id' \
+            "$RUNNER_TEMP/comments.json" | head -n 1)
+          # REST only: these calls are retried, and gh's GraphQL commands failed under the same outages.
           if [ -n "$id" ]; then
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" -F "body=@$RUNNER_TEMP/comment.md" > /dev/null
+            retry gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" -F "body=@$RUNNER_TEMP/comment.md" > /dev/null
           else
-            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/comment.md"
+            retry gh api --method POST "$comments" -F "body=@$RUNNER_TEMP/comment.md" > /dev/null
           fi
