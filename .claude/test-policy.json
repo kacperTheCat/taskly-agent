@@ -1,0 +1,89 @@
+{
+  "writable": [
+    "backend/tests/**/*.test.ts",
+    "frontend/src/**/*.test.ts",
+    "frontend/src/**/*.test.tsx"
+  ],
+  "packages": {
+    "backend": {
+      "source": "backend/src/**/*.ts",
+      "tests": "backend/tests/<module>.test.ts",
+      "skill": "backend-unit-tests"
+    },
+    "frontend": {
+      "source": "frontend/src/**/*.{ts,tsx}",
+      "tests": "colocated: <dir>/<Name>.test.tsx",
+      "skill": "frontend-unit-tests"
+    }
+  },
+  "skip": [
+    {
+      "glob": "**/*.test.{ts,tsx}",
+      "reason": "test file"
+    },
+    {
+      "glob": "**/types.ts",
+      "reason": "type declarations only"
+    },
+    {
+      "glob": "**/*.types.ts",
+      "reason": "type declarations only"
+    },
+    {
+      "glob": "**/*.d.ts",
+      "reason": "type declarations only"
+    },
+    {
+      "glob": "**/*.stories.tsx",
+      "reason": "Storybook story"
+    },
+    {
+      "glob": "**/*.styles.ts",
+      "reason": "styling only"
+    },
+    {
+      "glob": "**/index.ts",
+      "reason": "re-export barrel"
+    },
+    {
+      "glob": "frontend/src/design-system/**",
+      "reason": "design system, covered by Storybook"
+    },
+    {
+      "glob": "**/constants.{ts,tsx}",
+      "reason": "constants only"
+    },
+    {
+      "glob": "**/*.constants.ts",
+      "reason": "constants only"
+    },
+    {
+      "glob": "frontend/src/features/todos/api/queryKeys.ts",
+      "reason": "query key constants"
+    },
+    {
+      "glob": "frontend/src/lib/queryClient.ts",
+      "reason": "library configuration"
+    },
+    {
+      "glob": "frontend/src/test/**",
+      "reason": "test setup"
+    },
+    {
+      "glob": "frontend/src/main.tsx",
+      "reason": "app bootstrap"
+    },
+    {
+      "glob": "backend/src/main.ts",
+      "reason": "process bootstrap"
+    },
+    {
+      "glob": "backend/src/generated/**",
+      "reason": "generated Prisma client"
+    }
+  ],
+  "limits": {
+    "maxSourceFiles": 12,
+    "maxChangedLines": 1200
+  }
+}
