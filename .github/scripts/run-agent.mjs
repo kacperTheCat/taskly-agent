@@ -28,11 +28,12 @@ const budget = opt('--max-budget-usd');
 if (budget) args.push('--max-budget-usd', budget);
 
 const out = openSync(transcriptFile, 'w');
-const { status } = spawnSync('claude', args, {
+const { status, error } = spawnSync('claude', args, {
   input: readFileSync(promptFile, 'utf8'),
   stdio: ['pipe', out, 'inherit'],
   timeout: 15 * 60_000,
 });
+if (error) console.error(`claude failed to run: ${error.message}`);
 const summary = summarize(readFileSync(transcriptFile, 'utf8'));
 console.log(JSON.stringify({ exitCode: status, ...summary }, null, 2));
 process.exit(summary.report ? 0 : 1);
