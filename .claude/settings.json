@@ -1,6 +1,9 @@
 {
   "permissions": {
-    "deny": ["WebFetch", "WebSearch", "Read(./.env)", "Read(./.env.*)"]
+    "deny": [
+      "WebFetch", "WebSearch", "Read(./.env)", "Read(./.env.*)",
+      "Read(//proc/**)", "Read(//etc/**)"
+    ]
   },
   "hooks": {
     "PreToolUse": [
