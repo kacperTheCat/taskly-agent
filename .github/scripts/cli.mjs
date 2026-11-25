@@ -9,16 +9,23 @@ export function isMain(moduleUrl) {
   return moduleUrl === pathToFileURL(realpathSync(process.argv[1])).href;
 }
 
-// Parses `--name value` options and positionals, and exits with the usage text when a
-// required option or the minimum number of positionals is missing.
+// Parses `--name value` options and positionals. Exits 2 with the usage text when an option
+// is unknown, a required option is missing, or there are fewer positionals than expected.
 export function readArgs({ usage, options = {}, required = [], positionals = 0 }) {
-  try {
-    const { values, positionals: given } = parseArgs({ options, allowPositionals: true, strict: true });
-    const missing = required.filter((name) => values[name] === undefined);
-    if (missing.length || given.length < positionals) throw new Error(`missing ${missing.join(', ') || 'arguments'}`);
-    return { ...values, positionals: given };
-  } catch (error) {
-    console.error(`${error.message}\nUsage: ${usage}`);
+  const fail = (message) => {
+    console.error(`${message}\nUsage: ${usage}`);
     process.exit(2);
+  };
+
+  let parsed;
+  try {
+    parsed = parseArgs({ options, allowPositionals: true, strict: true });
+  } catch (error) {
+    fail(error.message);
   }
+  for (const name of required) {
+    if (parsed.values[name] === undefined) fail(`missing --${name}`);
+  }
+  if (parsed.positionals.length < positionals) fail(`expected ${positionals} argument(s)`);
+  return { ...parsed.values, positionals: parsed.positionals };
 }

@@ -36,38 +36,24 @@ export function matches(path, glob) {
 
 // Supports what the policy file uses: `**/` (any directories), `*` (within one segment)
 // and `{a,b}` (alternatives). Everything else is matched literally.
+const GLOB_TOKEN = /\*\*\/|\*\*|\*|[{},]|[^*{},]+/g;
+const WILDCARDS = { '**/': '(?:.*/)?', '**': '.*', '*': '[^/]*' };
+
 export function globToRegExp(glob) {
-  let pattern = '';
   let braceDepth = 0;
-  for (let i = 0; i < glob.length; i++) {
-    const char = glob[i];
-    switch (true) {
-      case glob.startsWith('**/', i):
-        pattern += '(?:.*/)?';
-        i += 2;
-        break;
-      case glob.startsWith('**', i):
-        pattern += '.*';
-        i += 1;
-        break;
-      case char === '*':
-        pattern += '[^/]*';
-        break;
-      case char === '{':
-        pattern += '(?:';
-        braceDepth++;
-        break;
-      case char === '}' && braceDepth > 0:
-        pattern += ')';
-        braceDepth--;
-        break;
-      case char === ',' && braceDepth > 0:
-        pattern += '|';
-        break;
-      default:
-        pattern += char.replace(/[.+?^$(){}|[\]\\,]/g, '\\$&');
+  const pattern = glob.replace(GLOB_TOKEN, (token) => {
+    if (WILDCARDS[token]) return WILDCARDS[token];
+    if (token === '{') {
+      braceDepth++;
+      return '(?:';
     }
-  }
+    if (token === '}' && braceDepth > 0) {
+      braceDepth--;
+      return ')';
+    }
+    if (token === ',' && braceDepth > 0) return '|';
+    return token.replace(/[.+?^$(){}|[\]\\,]/g, '\\$&');
+  });
   return new RegExp(`^${pattern}$`);
 }
 

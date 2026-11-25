@@ -1,5 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runScript } from './test-helpers.mjs';
 import { summarize } from './transcript.mjs';
 
 const lines = [
@@ -28,4 +32,13 @@ test('transcript summary survives a run cut off mid-line', () => {
 
 test('transcript summary tolerates messages without content', () => {
   assert.equal(summarize(JSON.stringify({ type: 'assistant', message: {} })).toolCalls, 0);
+});
+
+test('transcript --log prints commands and tool errors', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'transcript-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'summary.json');
+  writeFileSync(file, JSON.stringify(summarize(lines.join('\n'))));
+  const { stdout } = runScript('.github/scripts/transcript.mjs', ['--log', file]);
+  assert.equal(stdout, 'command: "node .claude/scripts/run-tests.mjs a.test.ts"\ntool error: "Permission denied"\n');
 });
