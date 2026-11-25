@@ -60,6 +60,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     if (applied.status !== 0) {
       verdict.rejected = [{ file: '(patch)', reason: applied.stderr.trim().slice(0, 500) }];
       files.length = 0;
+      git('reset', '--hard', '--quiet');
+      git('clean', '-fdq');
     }
     const tests = files.map((f) => f.b);
     const reasons = new Map();
@@ -77,7 +79,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     }
     for (const [file, reason] of reasons) {
       verdict.rejected.push({ file, reason });
-      if (verdict.modifiedExisting.includes(file)) git('checkout', '--', file); else rmSync(file);
+      if (verdict.modifiedExisting.includes(file)) git('checkout', 'HEAD', '--', file); else rmSync(file);
     }
     verdict.accepted = tests.filter((t) => !reasons.has(t));
   }
